@@ -1,0 +1,7 @@
+{
+  "current_rubric": "Ensure you explicitly search receptacles like cabinets, drawers, and countertops systematically. Do not repeat failed actions. Always verify if an item is picked up before moving.",
+  "failure_remediations": {
+    "cabinet_closed": "If a cabinet or drawer is closed, you must use the 'open' command before attempting to take items from inside it.",
+    "item_not_found": "If the target object is not visible in the current location, look around or use 'go to' to check other potential receptacles."
+  }
+}
