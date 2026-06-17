@@ -1,74 +1,87 @@
+"""
+run_and_check.py — 20-scenario baseline generation suite.
+Exports one TaskResult JSON per scenario + a combined JSONL for batch loading.
+
+Shreyashree: load all 20 via TaskResult.from_json_file() or read baseline_all_traces.jsonl
+Anagha:      each file's raw_trace is ready for SEALJudge.evaluate(trace, rubric)
+"""
+
 import json
 import os
 from agent import SEALAgent
+from scenarios import MultiScenarioALFWorldEnv
+from task_result import TaskResult, make_rubric_hash
 
-# Simulated ALFWorld Environment tracing standard text gym boundary states
-class SimulatedALFWorldEnv:
-    def __init__(self):
-        self.step_idx = 0
-        self.goal = "Put a clean apple inside the fridge."
-        self.states = {
-            0: "You are in the middle of a kitchen. Looking around, you see a counter 1, a sink 1, and a fridge 1.",
-            1: "You arrive at fridge 1. The fridge 1 is closed.",
-            2: "You open the fridge 1. The fridge 1 is open. Inside it, you see nothing.",
-            3: "You put the clean apple in the fridge 1. You won!"
-        }
-        # Variable to prevent simple hardcoded state exploits and test adaptive tracking
-        self.has_apple = True 
-    
-    def reset(self):
-        self.step_idx = 0
-        return self.goal, self.states[0]
-        
-    def step(self, action: str):
-        self.step_idx += 1
-        act = action.lower().strip()
-        
-        # Simulated transition dynamics matching classic text simulator responses
-        if "go to fridge" in act:
-            return self.states[1], False
-        elif "open fridge" in act:
-            return self.states[2], False
-        elif "put apple" in act and "fridge" in act:
-            return self.states[3], True
-        else:
-            return f"Command '{action}' recognized, but nothing visible changed in the environment.", False
+NUM_SCENARIOS = 20
 
 
-def main():
-    print("=== Initializing Week 1 SEALAgent Functional Test ===")
-    
-    # 1. Instantiate your core agent class modules
+def run_baseline_suite(output_dir: str = ".") -> list:
+    print("=== Launching Automated Multi-Trace Baseline Generation Suite ===")
+    os.makedirs(output_dir, exist_ok=True)
+
     agent = SEALAgent()
-    
-    # 2. Setup your mock text sandbox environment
-    env = SimulatedALFWorldEnv()
-    
-    # 3. Define configuration parameters (Injected down from your dataset configurations)
-    task_input = "Put a clean apple inside the fridge."
-    initial_rubric = (
-        "Ensure you sequentially navigate to structures. Always open "
-        "closed targets before placing elements inside. Do not loop."
-    )
-    
-    # 4. Phase 1 Check: Generate the Strategy Plan
-    print("\n[Testing Phase 1: Planning via Qwen-7B-Instruct]")
-    action_plan = agent.plan(task=task_input, rubric=initial_rubric)
-    print(f"Generated Plan:\n{action_plan}\n")
-    
-    # 5. Phase 2 Check: Run Environment Trajectory Loop with live adjustments
-    print("[Testing Phase 2: Execution & Trace Assembly]")
-    trace_output = agent.execute(plan=action_plan, env=env, rubric=initial_rubric)
-    
-    # 6. Check Deliverable: Verify the structured Trace JSON format
-    print("\n[Testing Phase 3: Trace JSON Validation]")
-    print(json.dumps(trace_output, indent=2))
-    
-    # Save compilation directly to system disk space
-    output_filename = "sample_execution_trace.json"
-    with open(output_filename, "w") as f:
-        json.dump(trace_output, f, indent=2)
-    print(f"\n=== Test Executed Successfully! '{output_filename}' exported. ===")
+    env = MultiScenarioALFWorldEnv()
+    rubric = "Approach structural components sequentially. Avoid state duplication loops."
+    rubric_version = 1
+    rubric_hash = make_rubric_hash(rubric)
+
+    all_results = []
+
+    for idx in range(NUM_SCENARIOS):
+        env.set_scenario(idx)
+        goal, _ = env.reset()
+        print(f"Generating Trace {idx + 1}/{NUM_SCENARIOS} -> Goal: {goal}")
+
+        action_plan = agent.plan(task=goal, rubric=rubric)
+        trace_output = agent.execute(plan=action_plan, env=env, rubric=rubric)
+
+        is_success = trace_output["final_outcome"] == "SUCCESS"
+        trajectory = trace_output["trajectory"]
+        total_steps = len(trajectory)
+
+        stagnant_steps = sum(
+            1 for s in trajectory if s["internal_loop_alert"] is not None
+        )
+        unique_actions = len(set(s["action_executed"] for s in trajectory))
+        stagnation_rate = round(stagnant_steps / total_steps, 2) if total_steps > 0 else 0.0
+
+        result = TaskResult(
+            task_id=f"task_{str(idx + 1).zfill(3)}",
+            iteration=1,
+            strategy_used=trace_output["macro_plan"],
+            failure_type=trace_output["detected_failure_type"],
+            score=1.0 if is_success else 0.0,
+            success=is_success,
+            rubric_version=rubric_version,
+            rubric_hash=rubric_hash,
+            raw_trace=trajectory,
+            task_description=goal,
+            oracle_failure_type="NONE" if is_success else env.data["forced_outcome"],
+            agent_confidence=trace_output["agent_intrinsic_confidence"],
+            plan_coherence=trace_output["plan_coherence"],
+            total_steps=total_steps,
+            stagnation_step_count=stagnant_steps,
+            trajectory_stagnation_rate=stagnation_rate,
+            unique_action_count=unique_actions,
+            action_density_index=round(unique_actions / total_steps, 2) if total_steps > 0 else 0.0,
+        )
+
+        # Individual file (same name pattern as before so nothing breaks)
+        filename = os.path.join(output_dir, f"sample_execution_trace_{idx + 1}.json")
+        with open(filename, "w") as f:
+            f.write(result.to_json())
+
+        all_results.append(result)
+
+    # Combined JSONL — one TaskResult per line, easy for Shreyashree to batch-load
+    combined_path = os.path.join(output_dir, "baseline_all_traces.jsonl")
+    with open(combined_path, "w") as f:
+        for r in all_results:
+            f.write(json.dumps(r.to_dict()) + "\n")
+
+    print(f"\n=== Done. {NUM_SCENARIOS} traces exported. Combined file: {combined_path} ===")
+    return all_results
+
 
 if __name__ == "__main__":
-    main()
+    run_baseline_suite()
