@@ -1,34 +1,33 @@
 from typing import List
 from collections import defaultdict
-from seal.dataclass import TaskResult, FailureType
 
-def task_success_rate(results: List[TaskResult]) -> float:
+def task_success_rate(results: List) -> float:
     """% of tasks that succeeded."""
     if not results:
         return 0.0
     return sum(r.success for r in results) / len(results)
 
 
-def failure_analysis_precision(results: List[TaskResult]) -> dict:
-    """Per failure-type breakdown of how often each type occurs."""
+def failure_analysis_precision(results: List) -> dict:
+    """Per failure-type breakdown of how often each type occurs among failures."""
     counts = defaultdict(int)
     total_failures = 0
 
     for r in results:
         if not r.success:
-            counts[r.failure_type.value] += 1
+            counts[r.failure_type] += 1
             total_failures += 1
 
     if total_failures == 0:
-        return {ft.value: 0.0 for ft in FailureType if ft != FailureType.NONE}
+        return {}
 
     return {ftype: count / total_failures for ftype, count in counts.items()}
 
 
-def judge_alignment(results: List[TaskResult]) -> float:
+def judge_alignment(results: List) -> float:
     """
-    Proxy: avg score on successful tasks vs failed tasks.
-    Higher gap = judge is well-aligned with outcomes.
+    Avg score on successful tasks vs failed tasks.
+    Higher gap = judge/agent scoring is well-aligned with actual outcomes.
     """
     success_scores = [r.score for r in results if r.success]
     failure_scores = [r.score for r in results if not r.success]
@@ -39,11 +38,8 @@ def judge_alignment(results: List[TaskResult]) -> float:
     return round(avg_success - avg_failure, 4)
 
 
-def convergence_speed(results: List[TaskResult]) -> dict:
-    """
-    Per task: how many iterations until first success.
-    Returns avg iterations to success across all tasks.
-    """
+def convergence_speed(results: List) -> dict:
+    """Per task: how many iterations until first success."""
     task_iterations = defaultdict(list)
     for r in results:
         task_iterations[r.task_id].append(r)
