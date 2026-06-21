@@ -1,15 +1,15 @@
 import os
 import re
-from huggingface_hub import InferenceClient
+import json
+import urllib.request
 
 VALID_ACTION_VERBS = ["go to", "open", "put", "place", "examine", "pick up", "take", "close"]
 
 
 def compute_plan_coherence(plan: str) -> float:
     """
-    Parses Qwen's plan output and returns a 0.0-1.0 coherence score.
+    Parses Mistral's plan output and returns a 0.0-1.0 coherence score.
     Criteria: numbered steps, valid action verbs, no empty lines mid-plan.
-    Exported in TaskResult so Shreyashree can use it as a metric directly.
     """
     if not plan or "[FALLBACK" in plan:
         return 0.0
@@ -30,48 +30,46 @@ def compute_plan_coherence(plan: str) -> float:
 class SEALAgent:
 
     def __init__(self, hf_token=None):
-        token = hf_token or os.environ.get("HF_TOKEN")
-        # Target the stable Qwen conversational endpoint
-        self.client = InferenceClient(
-            model="Qwen/Qwen2.5-7B-Instruct",
-            token=token,
-        )
+        # Local Ollama endpoint replaces the hosted Hugging Face InferenceClient
+        self.ollama_url = "http://localhost:11434/api/generate"
         self.steps_history = []
         self.consecutive_failures = 0
 
     def plan(self, task: str, rubric: str) -> str:
-        """Calls Qwen 2.5 via the supported conversational API to generate a structured action plan."""
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    f"You are a household task planning agent.\n"
-                    f"Rubric: {rubric}\n"
-                    f"Task: {task}\n"
-                )
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Produce a numbered step-by-step action plan to complete the task: '{task}'. "
-                    f"Each step must be a single executable action such as "
-                    f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
-                    f"Output ONLY the numbered plan, no preamble or greeting conversational fluff."
-                )
+        """Calls local Mistral 7B via Ollama to generate a structured CoT action plan."""
+        prompt = (
+            f"[INST] You are a household task planning agent.\n"
+            f"Rubric: {rubric}\n"
+            f"Task: {task}\n\n"
+            f"Produce a numbered step-by-step action plan to complete this task. "
+            f"Each step must be a single executable action such as "
+            f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
+            f"Output ONLY the numbered plan, no preamble. [/INST]"
+        )
+        
+        payload = {
+            "model": "mistral",
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0.3
             }
-        ]
+        }
+        
         try:
-            # Use chat_completion to satisfy the endpoint's task routing requirements
-            response = self.client.chat_completion(
-                messages=messages,
-                max_tokens=256,
-                temperature=0.3,
+            req = urllib.request.Request(
+                self.ollama_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
             )
-            return response.choices[0].message.content.strip()
+            with urllib.request.urlopen(req, timeout=300) as response:
+                res_data = json.loads(response.read().decode("utf-8"))
+                return res_data.get("response", "").strip()
         except Exception as e:
             return (
                 f"1. Go to container\n2. Open container\n3. Place item\n"
-                f"[FALLBACK - Qwen unavailable: {e}]"
+                f"[FALLBACK - Local Ollama Mistral unavailable: {e}]"
             )
 
     def _detect_failure_type(self, success: bool, trajectory: list) -> str:
