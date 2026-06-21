@@ -1,10 +1,9 @@
 """
-task_result.py — Shared integration contract for SEAL project.
+seal/task_result.py — Shared integration contract for SEAL project.
 everyone import TaskResult from here.
 
-
-Tanisha  → produces TaskResult objects in run_agent.py / run_and_check.py
-Anagha   → reads TaskResult.raw_trace + rubric; writes back score/failure_type
+Tanisha     → produces TaskResult objects in run_agent.py / run_and_check.py
+Anagha      → reads TaskResult.raw_trace + rubric; writes back score/failure_type
 Shreyashree → receives List[TaskResult], computes all four metrics as pure functions
 """
 
@@ -33,6 +32,8 @@ class TaskResult:
     agent_confidence: float = 0.50
     plan_coherence: float = 0.0         # 0.0–1.0; computed by compute_plan_coherence()
     total_steps: int = 0
+    drift_recovered: bool = False       # Flag for recovery from goal drift anomalies
+    rubric_text: Optional[str] = None   # Text content of the active guiding rubric
 
     # ── Judge-side extras (Anagha writes after evaluate()) ───────────────
     judge_score: Optional[float] = None
