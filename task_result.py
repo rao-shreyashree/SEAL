@@ -1,13 +1,3 @@
-"""
-task_result.py — Shared integration contract for SEAL project.
-everyone import TaskResult from here.
-
-
-Tanisha  → produces TaskResult objects in run_agent.py / run_and_check.py
-Anagha   → reads TaskResult.raw_trace + rubric; writes back score/failure_type
-Shreyashree → receives List[TaskResult], computes all four metrics as pure functions
-"""
-
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 import json
@@ -16,35 +6,44 @@ import hashlib
 
 @dataclass
 class TaskResult:
-    # ── Core contract fields (all required) ──────────────────────────────────
     task_id: str
     iteration: int
-    strategy_used: str          # Mistral-generated action plan text
-    failure_type: str           # Agent-detected: NONE|CONTEXT_LOSS|GOAL_DRIFT|EXECUTION_ERROR|UNKNOWN
-    score: float                # 0.0 or 1.0 (binary for now; judge can write fractional here)
+    strategy_used: str          
+    failure_type: str           
+    score: float                
     success: bool
     rubric_version: int
-    rubric_hash: str            # MD5 first 8 chars of rubric string
-    raw_trace: List[dict]       # List of step dicts from SEALAgent.execute()
+    rubric_hash: str            
+    raw_trace: List[dict]       
 
-    # ── Agent-side extras (Tanisha produces; others may read) ─────────────
     task_description: str = ""
-    oracle_failure_type: str = "NONE"   # Ground truth from env.data["forced_outcome"]
+    oracle_failure_type: str = "NONE"   
     agent_confidence: float = 0.50
-    plan_coherence: float = 0.0         # 0.0–1.0; computed by compute_plan_coherence()
+    plan_coherence: float = 0.0         
     total_steps: int = 0
 
-    # ── Judge-side extras (Anagha writes after evaluate()) ───────────────
     judge_score: Optional[float] = None
     judge_failure_type: Optional[str] = None
     judge_explanation: Optional[str] = None
     rubric_drift_score: Optional[float] = None
 
-    # ── Metrics (Shreyashree computes; stored here for SQLite logging) ────
     stagnation_step_count: int = 0
     trajectory_stagnation_rate: float = 0.0
     unique_action_count: int = 0
     action_density_index: float = 0.0
+
+    # NEW: additive field. Defaults to False so existing JSON files / callers
+    # that don't pass this kwarg are unaffected (from_dict() filters unknown
+    # keys, so old files without this field load fine too).
+    drift_recovered: bool = False
+
+    # NEW: additive field, optional. The full rubric TEXT active for this
+    # specific iteration (not just its hash). Lets Shreyashree compute
+    # rubric_drift_score by diffing actual rubric content across iterations
+    # 1->3 for a task_id, instead of reconstructing it indirectly from
+    # rubric_hash alone. Defaults to None - fully backward compatible with
+    # existing trace files that don't have this key.
+    rubric_text: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -54,8 +53,6 @@ class TaskResult:
 
     @classmethod
     def from_dict(cls, d: dict) -> "TaskResult":
-        """Load a TaskResult from a dict (e.g. from JSON file)."""
-        # Only pass fields that exist in the dataclass to avoid TypeError
         valid_fields = cls.__dataclass_fields__.keys()
         filtered = {k: v for k, v in d.items() if k in valid_fields}
         return cls(**filtered)

@@ -3,7 +3,6 @@ run_agent.py — Single-task execution runner.
 Runs one scenario, exports one TaskResult JSON.
 Use this for debugging / manual trace inspection.
 """
-
 import json
 import os
 from agent import SEALAgent
