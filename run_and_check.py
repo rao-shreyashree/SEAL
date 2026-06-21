@@ -1,11 +1,7 @@
 """
 run_and_check.py — 20-scenario baseline generation suite.
 Exports one TaskResult JSON per scenario + a combined JSONL for batch loading.
-
-Shreyashree: load all 20 via TaskResult.from_json_file() or read baseline_all_traces.jsonl
-Anagha:      each file's raw_trace is ready for SEALJudge.evaluate(trace, rubric)
 """
-
 import json
 import os
 from agent import SEALAgent
@@ -66,14 +62,12 @@ def run_baseline_suite(output_dir: str = ".") -> list:
             action_density_index=round(unique_actions / total_steps, 2) if total_steps > 0 else 0.0,
         )
 
-        # Individual file (same name pattern as before so nothing breaks)
         filename = os.path.join(output_dir, f"sample_execution_trace_{idx + 1}.json")
         with open(filename, "w") as f:
             f.write(result.to_json())
 
         all_results.append(result)
 
-    # Combined JSONL — one TaskResult per line, easy for Shreyashree to batch-load
     combined_path = os.path.join(output_dir, "baseline_all_traces.jsonl")
     with open(combined_path, "w") as f:
         for r in all_results:
