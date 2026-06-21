@@ -1,8 +1,8 @@
 import json
 import os
-from agent import SEALAgent
-from scenarios import MultiScenarioALFWorldEnv
-from task_result import TaskResult, make_rubric_hash
+from seal.task_result import TaskResult, make_rubric_hash
+from seal.scenarios import MultiScenarioALFWorldEnv
+from seal.agent import SEALAgent
 
 
 class MockSEALJudge:

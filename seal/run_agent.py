@@ -5,9 +5,9 @@ Use this for debugging / manual trace inspection.
 """
 import json
 import os
-from agent import SEALAgent
-from scenarios import MultiScenarioALFWorldEnv
-from task_result import TaskResult, make_rubric_hash
+from seal.task_result import TaskResult, make_rubric_hash
+from seal.scenarios import MultiScenarioALFWorldEnv
+from seal.agent import SEALAgent
 
 
 def run_single_task(scenario_id: int = 0, output_path: str = "TaskResult.json") -> TaskResult:
