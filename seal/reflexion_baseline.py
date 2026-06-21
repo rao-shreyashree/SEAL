@@ -36,23 +36,22 @@ BASELINE_RUBRIC = (
     "Verify containers are open before placement."
 )
 
-
 class ReflexionBaseline:
-    """Attempt -> verbal self-reflection -> retry. No judge, no rubric evolution."""
-
+    """Attempt -> verbal self-reflection -> retry. No judge, no rubric evolution"""
+ 
     def __init__(self, hf_token=None, max_iterations: int = 3):
         self.agent = SEALAgent(hf_token)
         self.max_iterations = max_iterations
         self.rubric = BASELINE_RUBRIC
         self.rubric_version = 1
         self.rubric_hash = make_rubric_hash(self.rubric)
-
+ 
     def _plan_with_memory(self, task: str, memory: str) -> str:
         """Same Mistral call as SEALAgent.plan(), but injects reflection memory
-        instead of an evolving rubric. The rubric text itself is never touched."""
+        instead of an evolving rubric. The rubric text itself is never touched"""
         if not memory:
             return self.agent.plan(task=task, rubric=self.rubric)
-
+ 
         prompt = (
             f"[INST] You are a household task planning agent.\n"
             f"Rubric: {self.rubric}\n"
@@ -74,10 +73,10 @@ class ReflexionBaseline:
                 f"1. Go to container\n2. Open container\n3. Place item\n"
                 f"[FALLBACK - Mistral unavailable: {e}]"
             )
-
+ 
     def _reflect(self, task: str, trace_output: dict) -> str:
         """Agent reflects verbally on its own failed trajectory. Same model, same
-        voice as the agent itself - no separate evaluator persona, no judge."""
+        voice as the agent itself - no separate evaluator persona, no judge"""
         trajectory_summary = "\n".join(
             f"Step {s['step']}: action='{s['action_executed']}' -> '{s['observation_received']}'"
             for s in trace_output["trajectory"]
@@ -97,19 +96,19 @@ class ReflexionBaseline:
             return response.strip()
         except Exception as e:
             return f"[FALLBACK reflection - Mistral unavailable: {e}]"
-
+ 
     def run(self, env, task_id: str) -> list:
         """Runs up to self.max_iterations attempts on one task. Returns
         List[TaskResult] - one per iteration, same shape SEALRunner produces,
         so Shreyashree's metrics functions and convergence curves work unmodified."""
         results = []
         memory = ""
-
+ 
         for iteration in range(1, self.max_iterations + 1):
             goal, _ = env.reset()
             plan = self._plan_with_memory(task=goal, memory=memory)
             trace_output = self.agent.execute(plan=plan, env=env, rubric=self.rubric)
-
+ 
             is_success = trace_output["final_outcome"] == "SUCCESS"
             trajectory = trace_output["trajectory"]
             total_steps = len(trajectory)
@@ -120,9 +119,9 @@ class ReflexionBaseline:
             stagnation_rate = (
                 round(stagnant_steps / total_steps, 2) if total_steps > 0 else 0.0
             )
-
+ 
             reflection_text = "" if is_success else self._reflect(goal, trace_output)
-
+ 
             result = TaskResult(
                 task_id=task_id,
                 iteration=iteration,
@@ -131,10 +130,10 @@ class ReflexionBaseline:
                 score=1.0 if is_success else 0.0,
                 success=is_success,
                 rubric_version=self.rubric_version,
-                rubric_hash=self.rubric_hash, # constant - no evolution
+                rubric_hash=self.rubric_hash, # no evolution
                 raw_trace=trajectory,
                 task_description=goal,
-                oracle_failure_type="NONE" if is_success else env.data["forced_outcome"],
+                oracle_failure_type=env.data["forced_outcome"],  # always log ground truth - collapsing to "NONE" on success destroys exactly the info needed to catch unexpected successes
                 agent_confidence=trace_output["agent_intrinsic_confidence"],
                 plan_coherence=trace_output["plan_coherence"],
                 total_steps=total_steps,
@@ -150,24 +149,25 @@ class ReflexionBaseline:
                 ),
             )
             results.append(result)
-
+ 
             if is_success:
                 break
             memory = reflection_text
-
+ 
         return results
-
-
+ 
+ 
 if __name__ == "__main__":
     # Quick manual smoke test - mirrors agent/run_agent.py's pattern
     from agent.scenarios import MultiScenarioALFWorldEnv
-
+ 
     env = MultiScenarioALFWorldEnv(scenario_id=4)  # CONTEXT_LOSS scenario
     baseline = ReflexionBaseline()
     task_results = baseline.run(env, task_id="task_baseline_001")
-
+ 
     for r in task_results:
         print(
             f"Iteration {r.iteration}: success={r.success}, "
             f"failure_type={r.failure_type}, reflection={r.judge_explanation}"
         )
+ 
