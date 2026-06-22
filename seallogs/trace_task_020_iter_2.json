@@ -1,0 +1,46 @@
+{
+  "task_id": "task_020",
+  "iteration": 2,
+  "strategy_used": "1. Go to refrigerator\n2. Open refrigerator door\n3. Reach for soda can\n4. Remove soda can from refrigerator\n5. Check if soda can is cooled (for confirmation)\n6. Close refrigerator door\n7. Go to counter\n8. Place soda can on counter",
+  "failure_type": "NONE",
+  "score": 1.0,
+  "success": true,
+  "rubric_version": 2,
+  "rubric_hash": "5c9933e5",
+  "raw_trace": [
+    {
+      "step": 1,
+      "action_executed": "go to counter 1",
+      "observation_received": "You arrive at counter 1. The counter 1 is closed.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 2,
+      "action_executed": "open counter 1",
+      "observation_received": "You open the counter 1. It is now open.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 3,
+      "action_executed": "put soda in counter 1",
+      "observation_received": "Success! You completed the task sequence for soda inside counter 1.",
+      "internal_loop_alert": null
+    }
+  ],
+  "task_description": "Place a cooled soda can on the counter.",
+  "oracle_failure_type": "NONE",
+  "agent_confidence": 0.95,
+  "plan_coherence": 0.62,
+  "total_steps": 3,
+  "judge_score": 0.0,
+  "judge_failure_type": "PENDING_VERIFICATION",
+  "judge_explanation": "Evaluated by baseline mock evaluator.",
+  "rubric_drift_score": null,
+  "stagnation_step_count": 0,
+  "trajectory_stagnation_rate": 0.0,
+  "unique_action_count": 3,
+  "action_density_index": 1.0,
+  "drift_recovered": false,
+  "strategy_label": "none",
+  "rubric_text": "Approach structural components sequentially. Avoid state duplication loops. [META-REFLECTION: Stop using 'look' consecutively. Force navigation shift.]"
+}

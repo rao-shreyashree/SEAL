@@ -1,0 +1,564 @@
+{
+  "task_005": [
+    {
+      "task_id": "task_005",
+      "iteration": 1,
+      "strategy_used": "1. Go to the location of the clean mug.\n2. Pick up the clean mug.\n3. Go to the cupboard.\n4. Open the cupboard door.\n5. Put the clean mug inside the cupboard.\n6. Close the cupboard door.",
+      "failure_type": "CONTEXT_LOSS",
+      "score": 0.0,
+      "success": false,
+      "rubric_version": 1,
+      "rubric_hash": "472284d5",
+      "raw_trace": [
+        {
+          "step": 1,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 2,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 1."
+        },
+        {
+          "step": 3,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 2."
+        },
+        {
+          "step": 4,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 3."
+        },
+        {
+          "step": 5,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 4."
+        },
+        {
+          "step": 6,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 5."
+        },
+        {
+          "step": 7,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 6."
+        },
+        {
+          "step": 8,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 7."
+        },
+        {
+          "step": 9,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 8."
+        },
+        {
+          "step": 10,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 9."
+        }
+      ],
+      "task_description": "Put a clean mug in the cupboard.",
+      "oracle_failure_type": "CONTEXT_LOSS",
+      "agent_confidence": 0.35,
+      "plan_coherence": 1.0,
+      "total_steps": 10,
+      "judge_score": 0.0,
+      "judge_failure_type": "PENDING_VERIFICATION",
+      "judge_explanation": "Evaluated by baseline mock evaluator.",
+      "rubric_drift_score": null,
+      "stagnation_step_count": 9,
+      "trajectory_stagnation_rate": 0.9,
+      "unique_action_count": 1,
+      "action_density_index": 0.1,
+      "drift_recovered": false,
+      "strategy_label": "meta_reflection",
+      "rubric_text": "Approach structural components sequentially. Avoid state duplication loops."
+    },
+    {
+      "task_id": "task_005",
+      "iteration": 2,
+      "strategy_used": "1. Go to the location of the clean mug.\n2. Pick up the clean mug.\n3. Navigate to the cupboard.\n4. Open the cupboard door.\n5. Place the clean mug inside the cupboard.\n6. Close the cupboard door.",
+      "failure_type": "NONE",
+      "score": 1.0,
+      "success": true,
+      "rubric_version": 2,
+      "rubric_hash": "5c9933e5",
+      "raw_trace": [
+        {
+          "step": 1,
+          "action_executed": "go to cupboard 1",
+          "observation_received": "You arrive at cupboard 1. The cupboard 1 is closed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 2,
+          "action_executed": "open cupboard 1",
+          "observation_received": "You open the cupboard 1. It is now open.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 3,
+          "action_executed": "put mug in cupboard 1",
+          "observation_received": "Success! You completed the task sequence for mug inside cupboard 1.",
+          "internal_loop_alert": null
+        }
+      ],
+      "task_description": "Put a clean mug in the cupboard.",
+      "oracle_failure_type": "NONE",
+      "agent_confidence": 0.95,
+      "plan_coherence": 0.83,
+      "total_steps": 3,
+      "judge_score": 0.0,
+      "judge_failure_type": "PENDING_VERIFICATION",
+      "judge_explanation": "Evaluated by baseline mock evaluator.",
+      "rubric_drift_score": null,
+      "stagnation_step_count": 0,
+      "trajectory_stagnation_rate": 0.0,
+      "unique_action_count": 3,
+      "action_density_index": 1.0,
+      "drift_recovered": false,
+      "strategy_label": "none",
+      "rubric_text": "Approach structural components sequentially. Avoid state duplication loops. [META-REFLECTION: Stop using 'look' consecutively. Force navigation shift.]"
+    }
+  ],
+  "task_010": [
+    {
+      "task_id": "task_010",
+      "iteration": 1,
+      "strategy_used": "1. Go to the location of the tissue box.\n2. Pick up the tissue box.\n3. Go to the nightstand.\n4. Place the tissue box on the nightstand.\n5. Confirm that the tissue box is on the nightstand (for verification).",
+      "failure_type": "GOAL_DRIFT",
+      "score": 0.0,
+      "success": false,
+      "rubric_version": 1,
+      "rubric_hash": "472284d5",
+      "raw_trace": [
+        {
+          "step": 1,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 2,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 1."
+        },
+        {
+          "step": 3,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 2."
+        },
+        {
+          "step": 4,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 3."
+        },
+        {
+          "step": 5,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 4."
+        },
+        {
+          "step": 6,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 5."
+        },
+        {
+          "step": 7,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 6."
+        },
+        {
+          "step": 8,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 7."
+        },
+        {
+          "step": 9,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 8."
+        },
+        {
+          "step": 10,
+          "action_executed": "put key ring in nightstand 1",
+          "observation_received": "You put the wrong item down. Task drift detected.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 9."
+        }
+      ],
+      "task_description": "Put a tissue box on the nightstand.",
+      "oracle_failure_type": "GOAL_DRIFT",
+      "agent_confidence": 0.85,
+      "plan_coherence": 0.8,
+      "total_steps": 10,
+      "judge_score": 0.0,
+      "judge_failure_type": "PENDING_VERIFICATION",
+      "judge_explanation": "Evaluated by baseline mock evaluator.",
+      "rubric_drift_score": null,
+      "stagnation_step_count": 9,
+      "trajectory_stagnation_rate": 0.9,
+      "unique_action_count": 1,
+      "action_density_index": 0.1,
+      "drift_recovered": false,
+      "strategy_label": "iterative_prompting",
+      "rubric_text": "Approach structural components sequentially. Avoid state duplication loops."
+    },
+    {
+      "task_id": "task_010",
+      "iteration": 2,
+      "strategy_used": "1. Go to the location of the tissue box.\n2. Pick up the tissue box.\n3. Go to the nightstand.\n4. Place the tissue box on the nightstand.\n5. Confirm that the tissue box is on the nightstand (ITERATIVE-PROMPTING).",
+      "failure_type": "NONE",
+      "score": 1.0,
+      "success": true,
+      "rubric_version": 2,
+      "rubric_hash": "cfd4b5b6",
+      "raw_trace": [
+        {
+          "step": 1,
+          "action_executed": "go to nightstand 1",
+          "observation_received": "You arrive at nightstand 1. The nightstand 1 is closed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 2,
+          "action_executed": "open nightstand 1",
+          "observation_received": "You open the nightstand 1. It is now open.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 3,
+          "action_executed": "put tissue in nightstand 1",
+          "observation_received": "Success! You completed the task sequence for tissue inside nightstand 1.",
+          "internal_loop_alert": null
+        }
+      ],
+      "task_description": "Put a tissue box on the nightstand.",
+      "oracle_failure_type": "NONE",
+      "agent_confidence": 0.95,
+      "plan_coherence": 0.8,
+      "total_steps": 3,
+      "judge_score": 0.0,
+      "judge_failure_type": "PENDING_VERIFICATION",
+      "judge_explanation": "Evaluated by baseline mock evaluator.",
+      "rubric_drift_score": null,
+      "stagnation_step_count": 0,
+      "trajectory_stagnation_rate": 0.0,
+      "unique_action_count": 3,
+      "action_density_index": 1.0,
+      "drift_recovered": false,
+      "strategy_label": "none",
+      "rubric_text": "Approach structural components sequentially. Avoid state duplication loops. [ITERATIVE-PROMPTING: Double check target items before execution.]"
+    }
+  ],
+  "task_015": [
+    {
+      "task_id": "task_015",
+      "iteration": 1,
+      "strategy_used": "1. Go to the drawer.\n2. Open the drawer.\n3. Pick up the pencil.\n4. Put the pencil inside the drawer.\n5. Close the drawer.",
+      "failure_type": "EXECUTION_ERROR",
+      "score": 0.0,
+      "success": false,
+      "rubric_version": 1,
+      "rubric_hash": "472284d5",
+      "raw_trace": [
+        {
+          "step": 1,
+          "action_executed": "go to drawer 1",
+          "observation_received": "You arrive at drawer 1. The drawer 1 is closed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 2,
+          "action_executed": "open drawer 1",
+          "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 3,
+          "action_executed": "open drawer 1",
+          "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 1."
+        },
+        {
+          "step": 4,
+          "action_executed": "open drawer 1",
+          "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 2."
+        },
+        {
+          "step": 5,
+          "action_executed": "put pencil in drawer 1",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 6,
+          "action_executed": "open drawer 1",
+          "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 7,
+          "action_executed": "open drawer 1",
+          "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 1."
+        },
+        {
+          "step": 8,
+          "action_executed": "open drawer 1",
+          "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 2."
+        },
+        {
+          "step": 9,
+          "action_executed": "put pencil in drawer 1",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 10,
+          "action_executed": "open drawer 1",
+          "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+          "internal_loop_alert": null
+        }
+      ],
+      "task_description": "Put a pencil inside the drawer.",
+      "oracle_failure_type": "EXECUTION_ERROR",
+      "agent_confidence": 0.35,
+      "plan_coherence": 1.0,
+      "total_steps": 10,
+      "judge_score": 0.0,
+      "judge_failure_type": "PENDING_VERIFICATION",
+      "judge_explanation": "Evaluated by baseline mock evaluator.",
+      "rubric_drift_score": null,
+      "stagnation_step_count": 4,
+      "trajectory_stagnation_rate": 0.4,
+      "unique_action_count": 3,
+      "action_density_index": 0.3,
+      "drift_recovered": false,
+      "strategy_label": "iterative_prompting",
+      "rubric_text": "Approach structural components sequentially. Avoid state duplication loops."
+    },
+    {
+      "task_id": "task_015",
+      "iteration": 2,
+      "strategy_used": "1. Go to the drawer.\n2. Open the drawer.\n3. Examine the contents of the drawer (ITERATIVE-PROMPTING: Ensure there is no pencil inside).\n4. If a pencil is not found, go to the location of the pencil.\n5. Pick up the pencil.\n6. Go back to the drawer.\n7. Put the pencil in the drawer.\n8. Close the drawer.",
+      "failure_type": "NONE",
+      "score": 1.0,
+      "success": true,
+      "rubric_version": 2,
+      "rubric_hash": "cfd4b5b6",
+      "raw_trace": [
+        {
+          "step": 1,
+          "action_executed": "go to drawer 1",
+          "observation_received": "You arrive at drawer 1. The drawer 1 is closed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 2,
+          "action_executed": "open drawer 1",
+          "observation_received": "You open the drawer 1. It is now open.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 3,
+          "action_executed": "open drawer 1",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 4,
+          "action_executed": "open drawer 1",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 1."
+        },
+        {
+          "step": 5,
+          "action_executed": "open drawer 1",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 2."
+        },
+        {
+          "step": 6,
+          "action_executed": "put pencil in drawer 1",
+          "observation_received": "Success! You completed the task sequence for pencil inside drawer 1.",
+          "internal_loop_alert": null
+        }
+      ],
+      "task_description": "Put a pencil inside the drawer.",
+      "oracle_failure_type": "NONE",
+      "agent_confidence": 0.95,
+      "plan_coherence": 0.88,
+      "total_steps": 6,
+      "judge_score": 0.0,
+      "judge_failure_type": "PENDING_VERIFICATION",
+      "judge_explanation": "Evaluated by baseline mock evaluator.",
+      "rubric_drift_score": null,
+      "stagnation_step_count": 2,
+      "trajectory_stagnation_rate": 0.33,
+      "unique_action_count": 3,
+      "action_density_index": 0.5,
+      "drift_recovered": false,
+      "strategy_label": "none",
+      "rubric_text": "Approach structural components sequentially. Avoid state duplication loops. [ITERATIVE-PROMPTING: Double check target items before execution.]"
+    }
+  ],
+  "task_020": [
+    {
+      "task_id": "task_020",
+      "iteration": 1,
+      "strategy_used": "1. Go to refrigerator\n2. Open refrigerator door\n3. Retrieve soda can\n4. Close refrigerator door\n5. Go to counter\n6. Place soda can on counter",
+      "failure_type": "CONTEXT_LOSS",
+      "score": 0.0,
+      "success": false,
+      "rubric_version": 1,
+      "rubric_hash": "472284d5",
+      "raw_trace": [
+        {
+          "step": 1,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 2,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 1."
+        },
+        {
+          "step": 3,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 2."
+        },
+        {
+          "step": 4,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 3."
+        },
+        {
+          "step": 5,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 4."
+        },
+        {
+          "step": 6,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 5."
+        },
+        {
+          "step": 7,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 6."
+        },
+        {
+          "step": 8,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 7."
+        },
+        {
+          "step": 9,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 8."
+        },
+        {
+          "step": 10,
+          "action_executed": "look",
+          "observation_received": "Command recognized, but nothing visible changed.",
+          "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 9."
+        }
+      ],
+      "task_description": "Place a cooled soda can on the counter.",
+      "oracle_failure_type": "CONTEXT_LOSS",
+      "agent_confidence": 0.35,
+      "plan_coherence": 0.83,
+      "total_steps": 10,
+      "judge_score": 0.0,
+      "judge_failure_type": "PENDING_VERIFICATION",
+      "judge_explanation": "Evaluated by baseline mock evaluator.",
+      "rubric_drift_score": null,
+      "stagnation_step_count": 9,
+      "trajectory_stagnation_rate": 0.9,
+      "unique_action_count": 1,
+      "action_density_index": 0.1,
+      "drift_recovered": false,
+      "strategy_label": "meta_reflection",
+      "rubric_text": "Approach structural components sequentially. Avoid state duplication loops."
+    },
+    {
+      "task_id": "task_020",
+      "iteration": 2,
+      "strategy_used": "1. Go to refrigerator\n2. Open refrigerator door\n3. Reach for soda can\n4. Remove soda can from refrigerator\n5. Check if soda can is cooled (for confirmation)\n6. Close refrigerator door\n7. Go to counter\n8. Place soda can on counter",
+      "failure_type": "NONE",
+      "score": 1.0,
+      "success": true,
+      "rubric_version": 2,
+      "rubric_hash": "5c9933e5",
+      "raw_trace": [
+        {
+          "step": 1,
+          "action_executed": "go to counter 1",
+          "observation_received": "You arrive at counter 1. The counter 1 is closed.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 2,
+          "action_executed": "open counter 1",
+          "observation_received": "You open the counter 1. It is now open.",
+          "internal_loop_alert": null
+        },
+        {
+          "step": 3,
+          "action_executed": "put soda in counter 1",
+          "observation_received": "Success! You completed the task sequence for soda inside counter 1.",
+          "internal_loop_alert": null
+        }
+      ],
+      "task_description": "Place a cooled soda can on the counter.",
+      "oracle_failure_type": "NONE",
+      "agent_confidence": 0.95,
+      "plan_coherence": 0.62,
+      "total_steps": 3,
+      "judge_score": 0.0,
+      "judge_failure_type": "PENDING_VERIFICATION",
+      "judge_explanation": "Evaluated by baseline mock evaluator.",
+      "rubric_drift_score": null,
+      "stagnation_step_count": 0,
+      "trajectory_stagnation_rate": 0.0,
+      "unique_action_count": 3,
+      "action_density_index": 1.0,
+      "drift_recovered": false,
+      "strategy_label": "none",
+      "rubric_text": "Approach structural components sequentially. Avoid state duplication loops. [META-REFLECTION: Stop using 'look' consecutively. Force navigation shift.]"
+    }
+  ]
+}

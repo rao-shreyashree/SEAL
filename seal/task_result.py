@@ -1,12 +1,3 @@
-"""
-seal/task_result.py — Shared integration contract for SEAL project.
-everyone import TaskResult from here.
-
-Tanisha     → produces TaskResult objects in run_agent.py / run_and_check.py
-Anagha      → reads TaskResult.raw_trace + rubric; writes back score/failure_type
-Shreyashree → receives List[TaskResult], computes all four metrics as pure functions
-"""
-
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 import json
@@ -15,37 +6,48 @@ import hashlib
 
 @dataclass
 class TaskResult:
-    # ── Core contract fields (all required) ──────────────────────────────────
     task_id: str
     iteration: int
-    strategy_used: str          # Mistral-generated action plan text
-    failure_type: str           # Agent-detected: NONE|CONTEXT_LOSS|GOAL_DRIFT|EXECUTION_ERROR|UNKNOWN
-    score: float                # 0.0 or 1.0 (binary for now; judge can write fractional here)
+    strategy_used: str          # raw plan text from Mistral/Ollama — do NOT use for Fig 3
+    failure_type: str
+    score: float
     success: bool
     rubric_version: int
-    rubric_hash: str            # MD5 first 8 chars of rubric string
-    raw_trace: List[dict]       # List of step dicts from SEALAgent.execute()
+    rubric_hash: str
+    raw_trace: List[dict]
 
-    # ── Agent-side extras (Tanisha produces; others may read) ─────────────
     task_description: str = ""
-    oracle_failure_type: str = "NONE"   # Ground truth from env.data["forced_outcome"]
+    oracle_failure_type: str = "NONE"
     agent_confidence: float = 0.50
-    plan_coherence: float = 0.0         # 0.0–1.0; computed by compute_plan_coherence()
+    plan_coherence: float = 0.0
     total_steps: int = 0
-    drift_recovered: bool = False       # Flag for recovery from goal drift anomalies
-    rubric_text: Optional[str] = None   # Text content of the active guiding rubric
 
-    # ── Judge-side extras (Anagha writes after evaluate()) ───────────────
     judge_score: Optional[float] = None
     judge_failure_type: Optional[str] = None
     judge_explanation: Optional[str] = None
     rubric_drift_score: Optional[float] = None
 
-    # ── Metrics (Shreyashree computes; stored here for SQLite logging) ────
     stagnation_step_count: int = 0
     trajectory_stagnation_rate: float = 0.0
     unique_action_count: int = 0
     action_density_index: float = 0.0
+
+    # Additive. Defaults False so old JSON files without this key load fine.
+    drift_recovered: bool = False
+
+    # NEW: strategy label written by SEALRunner — one of:
+    #   "meta_reflection"      (fired when failure_type == CONTEXT_LOSS)
+    #   "iterative_prompting"  (all other failure types)
+    #   "none"                 (task succeeded on iteration 1, no strategy applied)
+    # SEPARATE from strategy_used which holds raw plan text.
+    # Shreyashree's figures.py reads THIS for Fig 3 (strategy selection frequency)
+    # and Fig 4 (strategy-outcome correlation).
+    strategy_label: str = "none"
+
+    # Additive. Full rubric TEXT active for this iteration (not just hash).
+    # Lets Shreyashree compute rubric_drift_score by diffing rubric content
+    # across iterations 1->3 per task_id. Defaults None — backward compatible.
+    rubric_text: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -55,8 +57,6 @@ class TaskResult:
 
     @classmethod
     def from_dict(cls, d: dict) -> "TaskResult":
-        """Load a TaskResult from a dict (e.g. from JSON file)."""
-        # Only pass fields that exist in the dataclass to avoid TypeError
         valid_fields = cls.__dataclass_fields__.keys()
         filtered = {k: v for k, v in d.items() if k in valid_fields}
         return cls(**filtered)

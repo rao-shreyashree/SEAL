@@ -1,15 +1,14 @@
 import json
 import os
-from seal.task_result import TaskResult, make_rubric_hash
-from seal.scenarios import MultiScenarioALFWorldEnv
-from seal.agent import SEALAgent
+from agent import SEALAgent
+from scenarios import MultiScenarioALFWorldEnv
+from task_result import TaskResult, make_rubric_hash
 
 
 class MockSEALJudge:
     """
     Placeholder for Anagha's real SEALJudge. Same method signatures as the
-    real judge is expected to expose, so swapping this out is a one-line
-    change in SEALRunner.__init__ once her class is ready:
+    real judge will expose, so swapping it in is a one-line change:
         self.judge = SEALJudge()   instead of   self.judge = MockSEALJudge()
     """
     def evaluate(self, raw_trace: list, rubric: str) -> dict:
@@ -65,6 +64,20 @@ class SEALRunner:
             agent_failure_type = trace_output["detected_failure_type"]
             evaluation_report = self.judge.evaluate(trajectory, active_rubric)
 
+            # strategy_label: the actual retry strategy name applied THIS iteration.
+            # "none" on iteration 1 successes (no retry needed).
+            # On failure iterations, this is set BEFORE rubric evolution so it
+            # records what strategy was SELECTED in response to THIS failure,
+            # which is what Shreyashree's Fig 3 / Fig 4 need.
+            # NOTE: strategy_used in TaskResult holds raw plan TEXT from Ollama —
+            # that is a completely different field, used by Anagha's judge.
+            if is_success:
+                strategy_label = "none"
+            elif agent_failure_type == "CONTEXT_LOSS":
+                strategy_label = "meta_reflection"
+            else:
+                strategy_label = "iterative_prompting"
+
             result = TaskResult(
                 task_id=task_id,
                 iteration=iteration,
@@ -88,6 +101,7 @@ class SEALRunner:
                 judge_failure_type=evaluation_report["judge_failure_type"],
                 judge_explanation=evaluation_report["judge_explanation"],
                 drift_recovered=trace_output.get("drift_recovered", False),
+                strategy_label=strategy_label,
                 rubric_text=active_rubric,
             )
 
@@ -101,8 +115,7 @@ class SEALRunner:
                 print(f"Success achieved in iteration {iteration}")
                 break
 
-            strategy_type = "meta_reflection" if agent_failure_type == "CONTEXT_LOSS" else "iterative_prompting"
-            print(f"Task Failed via [{agent_failure_type}]. Updating rubric using strategy: {strategy_type}")
+            print(f"Task Failed via [{agent_failure_type}]. Strategy applied: {strategy_label}")
             active_rubric = self.judge.evolve_rubric(active_rubric, agent_failure_type)
 
         return task_iteration_history

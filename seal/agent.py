@@ -8,29 +8,26 @@ VALID_ACTION_VERBS = ["go to", "open", "put", "place", "examine", "pick up", "ta
 
 def compute_plan_coherence(plan: str) -> float:
     """
-    Parses Mistral's plan output and returns a 0.0-1.0 coherence score.
+    Parses plan output and returns a 0.0-1.0 coherence score.
     Criteria: numbered steps, valid action verbs, no empty lines mid-plan.
+    Returns 0.0 for fallback plans (Ollama unavailable).
     """
     if not plan or "[FALLBACK" in plan:
         return 0.0
-
     lines = [l.strip() for l in plan.strip().split("\n") if l.strip()]
     numbered = [l for l in lines if re.match(r"^\d+[\.\)]\s+", l)]
     if not numbered:
-        return 0.1  # Has content but not structured
-
+        return 0.1  # has content but not structured
     valid_steps = sum(
         1 for step in numbered
         if any(verb in step.lower() for verb in VALID_ACTION_VERBS)
     )
-    coherence = valid_steps / len(numbered)
-    return round(coherence, 2)
+    return round(valid_steps / len(numbered), 2)
 
 
 class SEALAgent:
 
     def __init__(self, hf_token=None):
-        # Local Ollama endpoint replaces the hosted Hugging Face InferenceClient
         self.ollama_url = "http://localhost:11434/api/generate"
         self.steps_history = []
         self.consecutive_failures = 0
@@ -46,16 +43,12 @@ class SEALAgent:
             f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
             f"Output ONLY the numbered plan, no preamble. [/INST]"
         )
-        
         payload = {
             "model": "mistral",
             "prompt": prompt,
             "stream": False,
-            "options": {
-                "temperature": 0.3
-            }
+            "options": {"temperature": 0.3}
         }
-        
         try:
             req = urllib.request.Request(
                 self.ollama_url,
@@ -76,11 +69,13 @@ class SEALAgent:
         """Intrinsic failure diagnostic engine (independent from environmental oracle)."""
         if success:
             return "NONE"
-
         total = len(trajectory)
         if total == 0:
             return "EXECUTION_ERROR"
 
+        # GOAL_DRIFT checked first — repeated drift-rejection observations look
+        # identical across steps and would be misread as CONTEXT_LOSS stagnation
+        # if checked second.
         wrong_object_steps = [
             s for s in trajectory
             if "wrong item" in s["observation_received"].lower()
@@ -89,11 +84,8 @@ class SEALAgent:
         if wrong_object_steps:
             return "GOAL_DRIFT"
 
-        stagnant = sum(
-            1 for s in trajectory if s["internal_loop_alert"] is not None
-        )
+        stagnant = sum(1 for s in trajectory if s["internal_loop_alert"] is not None)
         stagnation_rate = stagnant / total
-
         if stagnation_rate >= 0.6:
             return "CONTEXT_LOSS"
 
@@ -106,7 +98,12 @@ class SEALAgent:
         return "UNKNOWN"
 
     def _detect_drift_recovery(self, success: bool, trajectory: list) -> bool:
-        """Flags whether the trajectory contained a drift event that was later recovered from."""
+        """
+        Flags whether a drift event occurred inside an iteration that still
+        succeeded — i.e. the agent self-corrected without a rubric retry.
+        Forward-compatible instrumentation; currently fires False for all
+        forced-failure scenarios since drift blocks the whole iteration.
+        """
         drift_seen = any(
             "wrong item" in s["observation_received"].lower()
             or "task drift" in s["observation_received"].lower()
@@ -124,21 +121,34 @@ class SEALAgent:
         max_steps = 10
         sequence_state = 0
 
-        target = env.target
-        item = env.item
-        drift_item = env.drift_item
+        # Read target and item from env.data — env.target / env.item are not
+        # attributes set by set_scenario(); only env.drift_item is. Reading
+        # from env.data["target"] / env.data["item"] is the correct accessor.
+        target = env.data["target"]
+        item = env.data["item"]
+        drift_item = env.drift_item  # set_scenario() sets this explicitly; safe to read directly
 
         while not done and step_count < max_steps:
             step_count += 1
-
             forced_outcome = env.data["forced_outcome"]
 
+            # Priority order matters:
+            # 1. CONTEXT_LOSS trap: keep sending "look" until rubric evolves with META-REFLECTION
+            # 2. GOAL_DRIFT trap: keep putting wrong item until rubric evolves with ITERATIVE-PROMPTING
+            #    NOTE: this branch must come BEFORE consecutive_failures recovery so the
+            #    recovery branch never silently swaps in the correct item and fakes a pass.
+            # 3. Recovery escape hatch (non-drift stagnation only)
+            # 4. Normal navigation sequence
             if forced_outcome == "CONTEXT_LOSS" and "META-REFLECTION" not in rubric:
                 action = "look"
+            elif forced_outcome == "GOAL_DRIFT" and "ITERATIVE-PROMPTING" not in rubric:
+                # Always put the wrong item — consecutive_failures recovery is intentionally
+                # blocked here. If we let recovery fire, the agent would swap to the correct
+                # item after 2 stagnant steps, log a false SUCCESS, and the GOAL_DRIFT →
+                # iterative_prompting strategy path would never get exercised.
+                action = f"put {drift_item} in {target} 1"
             elif self.consecutive_failures >= 2:
                 action = f"put {item} in {target} 1"
-            elif forced_outcome == "GOAL_DRIFT" and step_count == 3 and "ITERATIVE-PROMPTING" not in rubric:
-                action = f"put {drift_item} in {target} 1"
             elif sequence_state == 0:
                 action = f"go to {target} 1"
                 sequence_state = 1
@@ -154,6 +164,7 @@ class SEALAgent:
 
             next_obs, success = env.step(action, rubric)
 
+            # internal_loop_alert is Python None or a warning string — never the string "None"
             internal_warning = None
             if next_obs == current_obs:
                 self.consecutive_failures += 1

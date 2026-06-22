@@ -1,0 +1,46 @@
+{
+  "task_id": "task_005",
+  "iteration": 2,
+  "strategy_used": "1. Go to the location of the clean mug.\n2. Pick up the clean mug.\n3. Navigate to the cupboard.\n4. Open the cupboard door.\n5. Place the clean mug inside the cupboard.\n6. Close the cupboard door.",
+  "failure_type": "NONE",
+  "score": 1.0,
+  "success": true,
+  "rubric_version": 2,
+  "rubric_hash": "5c9933e5",
+  "raw_trace": [
+    {
+      "step": 1,
+      "action_executed": "go to cupboard 1",
+      "observation_received": "You arrive at cupboard 1. The cupboard 1 is closed.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 2,
+      "action_executed": "open cupboard 1",
+      "observation_received": "You open the cupboard 1. It is now open.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 3,
+      "action_executed": "put mug in cupboard 1",
+      "observation_received": "Success! You completed the task sequence for mug inside cupboard 1.",
+      "internal_loop_alert": null
+    }
+  ],
+  "task_description": "Put a clean mug in the cupboard.",
+  "oracle_failure_type": "NONE",
+  "agent_confidence": 0.95,
+  "plan_coherence": 0.83,
+  "total_steps": 3,
+  "judge_score": 0.0,
+  "judge_failure_type": "PENDING_VERIFICATION",
+  "judge_explanation": "Evaluated by baseline mock evaluator.",
+  "rubric_drift_score": null,
+  "stagnation_step_count": 0,
+  "trajectory_stagnation_rate": 0.0,
+  "unique_action_count": 3,
+  "action_density_index": 1.0,
+  "drift_recovered": false,
+  "strategy_label": "none",
+  "rubric_text": "Approach structural components sequentially. Avoid state duplication loops. [META-REFLECTION: Stop using 'look' consecutively. Force navigation shift.]"
+}

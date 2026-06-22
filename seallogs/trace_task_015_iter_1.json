@@ -1,0 +1,88 @@
+{
+  "task_id": "task_015",
+  "iteration": 1,
+  "strategy_used": "1. Go to the drawer.\n2. Open the drawer.\n3. Pick up the pencil.\n4. Put the pencil inside the drawer.\n5. Close the drawer.",
+  "failure_type": "EXECUTION_ERROR",
+  "score": 0.0,
+  "success": false,
+  "rubric_version": 1,
+  "rubric_hash": "472284d5",
+  "raw_trace": [
+    {
+      "step": 1,
+      "action_executed": "go to drawer 1",
+      "observation_received": "You arrive at drawer 1. The drawer 1 is closed.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 2,
+      "action_executed": "open drawer 1",
+      "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 3,
+      "action_executed": "open drawer 1",
+      "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+      "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 1."
+    },
+    {
+      "step": 4,
+      "action_executed": "open drawer 1",
+      "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+      "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 2."
+    },
+    {
+      "step": 5,
+      "action_executed": "put pencil in drawer 1",
+      "observation_received": "Command recognized, but nothing visible changed.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 6,
+      "action_executed": "open drawer 1",
+      "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 7,
+      "action_executed": "open drawer 1",
+      "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+      "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 1."
+    },
+    {
+      "step": 8,
+      "action_executed": "open drawer 1",
+      "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+      "internal_loop_alert": "WARNING: Loop detected. Stagnation count: 2."
+    },
+    {
+      "step": 9,
+      "action_executed": "put pencil in drawer 1",
+      "observation_received": "Command recognized, but nothing visible changed.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 10,
+      "action_executed": "open drawer 1",
+      "observation_received": "Mechanical failure: The drawer 1 handle is jammed.",
+      "internal_loop_alert": null
+    }
+  ],
+  "task_description": "Put a pencil inside the drawer.",
+  "oracle_failure_type": "EXECUTION_ERROR",
+  "agent_confidence": 0.35,
+  "plan_coherence": 1.0,
+  "total_steps": 10,
+  "judge_score": 0.0,
+  "judge_failure_type": "PENDING_VERIFICATION",
+  "judge_explanation": "Evaluated by baseline mock evaluator.",
+  "rubric_drift_score": null,
+  "stagnation_step_count": 4,
+  "trajectory_stagnation_rate": 0.4,
+  "unique_action_count": 3,
+  "action_density_index": 0.3,
+  "drift_recovered": false,
+  "strategy_label": "iterative_prompting",
+  "rubric_text": "Approach structural components sequentially. Avoid state duplication loops."
+}
