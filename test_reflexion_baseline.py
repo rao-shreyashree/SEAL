@@ -9,7 +9,7 @@ call per failure)
 """
 
 import json
-from agent.scenarios import MultiScenarioALFWorldEnv
+from seal.scenarios import MultiScenarioALFWorldEnv
 from seal.reflexion_baseline import ReflexionBaseline
 
 NUM_SCENARIOS = 20
