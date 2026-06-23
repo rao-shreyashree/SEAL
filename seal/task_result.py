@@ -35,18 +35,13 @@ class TaskResult:
     # Additive. Defaults False so old JSON files without this key load fine.
     drift_recovered: bool = False
 
-    # NEW: strategy label written by SEALRunner — one of:
-    #   "meta_reflection"      (fired when failure_type == CONTEXT_LOSS)
-    #   "iterative_prompting"  (all other failure types)
-    #   "none"                 (task succeeded on iteration 1, no strategy applied)
-    # SEPARATE from strategy_used which holds raw plan text.
-    # Shreyashree's figures.py reads THIS for Fig 3 (strategy selection frequency)
-    # and Fig 4 (strategy-outcome correlation).
+    # strategy_label: one of "meta_reflection" | "iterative_prompting" | "none"
+    # Written by SEALRunner. SEPARATE from strategy_used (raw plan text).
+    # Shreyashree's figures.py reads THIS for Fig 3 and Fig 4.
     strategy_label: str = "none"
 
-    # Additive. Full rubric TEXT active for this iteration (not just hash).
-    # Lets Shreyashree compute rubric_drift_score by diffing rubric content
-    # across iterations 1->3 per task_id. Defaults None — backward compatible.
+    # Full rubric TEXT active for this iteration (not just hash).
+    # Lets Shreyashree compute rubric_drift_score by diffing across iter 1->3.
     rubric_text: Optional[str] = None
 
     def to_dict(self) -> dict:

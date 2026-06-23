@@ -5,50 +5,31 @@ import urllib.request
 
 VALID_ACTION_VERBS = ["go to", "open", "put", "place", "examine", "pick up", "take", "close"]
 
-
 def compute_plan_coherence(plan: str) -> float:
-    """
-    Parses plan output and returns a 0.0-1.0 coherence score.
-    Criteria: numbered steps, valid action verbs, no empty lines mid-plan.
-    Returns 0.0 for fallback plans (Ollama unavailable).
-    """
     if not plan or "[FALLBACK" in plan:
         return 0.0
     lines = [l.strip() for l in plan.strip().split("\n") if l.strip()]
-    numbered = [l for l in lines if re.match(r"^\d+[\.\)]\s+", l)]
+    numbered = [l for l in lines if re.match(r"^\d+[.)]\s+", l)]
     if not numbered:
-        return 0.1  # has content but not structured
-    valid_steps = sum(
-        1 for step in numbered
-        if any(verb in step.lower() for verb in VALID_ACTION_VERBS)
-    )
+        return 0.1
+    valid_steps = sum(1 for step in numbered if any(verb in step.lower() for verb in VALID_ACTION_VERBS))
     return round(valid_steps / len(numbered), 2)
 
-
 class SEALAgent:
-
     def __init__(self, hf_token=None):
         self.ollama_url = "http://localhost:11434/api/generate"
         self.steps_history = []
         self.consecutive_failures = 0
 
     def plan(self, task: str, rubric: str) -> str:
-        """Calls local Mistral 7B via Ollama to generate a structured CoT action plan."""
         prompt = (
             f"[INST] You are a household task planning agent.\n"
             f"Rubric: {rubric}\n"
             f"Task: {task}\n\n"
             f"Produce a numbered step-by-step action plan to complete this task. "
-            f"Each step must be a single executable action such as "
-            f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
             f"Output ONLY the numbered plan, no preamble. [/INST]"
         )
-        payload = {
-            "model": "mistral",
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0.3}
-        }
+        payload = {"model": "mistral", "prompt": prompt, "stream": False, "options": {"temperature": 0.3}}
         try:
             req = urllib.request.Request(
                 self.ollama_url,
@@ -60,22 +41,16 @@ class SEALAgent:
                 res_data = json.loads(response.read().decode("utf-8"))
                 return res_data.get("response", "").strip()
         except Exception as e:
-            return (
-                f"1. Go to container\n2. Open container\n3. Place item\n"
-                f"[FALLBACK - Local Ollama Mistral unavailable: {e}]"
-            )
+            return f"1. Go to container\n[FALLBACK - Local Ollama Mistral unavailable: {e}]"
 
     def _detect_failure_type(self, success: bool, trajectory: list) -> str:
-        """Intrinsic failure diagnostic engine (independent from environmental oracle)."""
         if success:
             return "NONE"
         total = len(trajectory)
         if total == 0:
             return "EXECUTION_ERROR"
 
-        # GOAL_DRIFT checked first — repeated drift-rejection observations look
-        # identical across steps and would be misread as CONTEXT_LOSS stagnation
-        # if checked second.
+        # 1. GOAL_DRIFT checked FIRST - explicit text check uncoupled from stagnation metrics
         wrong_object_steps = [
             s for s in trajectory
             if "wrong item" in s["observation_received"].lower()
@@ -84,26 +59,34 @@ class SEALAgent:
         if wrong_object_steps:
             return "GOAL_DRIFT"
 
-        stagnant = sum(1 for s in trajectory if s["internal_loop_alert"] is not None)
-        stagnation_rate = stagnant / total
-        if stagnation_rate >= 0.6:
-            return "CONTEXT_LOSS"
-
+        # 2. EXECUTION_ERROR checked before stagnation rate
         blocked_keywords = ["jammed", "mechanical failure", "cannot open", "blocked"]
-        for step in trajectory:
-            obs = step["observation_received"].lower()
-            if any(kw in obs for kw in blocked_keywords):
-                return "EXECUTION_ERROR"
+        has_block = any(
+            any(kw in step["observation_received"].lower() for kw in blocked_keywords)
+            for step in trajectory
+        )
+        if has_block:
+            return "EXECUTION_ERROR"
+
+        # 3. Calculate stagnation rate ONLY on steps that are not drift observations
+        valid_eval_steps = 0
+        stagnant_steps = 0
+        for s in trajectory:
+            obs = s["observation_received"].lower()
+            if "task drift" in obs or "wrong item" in obs:
+                continue
+            valid_eval_steps += 1
+            if s["internal_loop_alert"] is not None:
+                stagnant_steps += 1
+
+        if valid_eval_steps > 0:
+            stagnation_rate = stagnant_steps / valid_eval_steps
+            if stagnation_rate >= 0.6:
+                return "CONTEXT_LOSS"
 
         return "UNKNOWN"
 
     def _detect_drift_recovery(self, success: bool, trajectory: list) -> bool:
-        """
-        Flags whether a drift event occurred inside an iteration that still
-        succeeded — i.e. the agent self-corrected without a rubric retry.
-        Forward-compatible instrumentation; currently fires False for all
-        forced-failure scenarios since drift blocks the whole iteration.
-        """
         drift_seen = any(
             "wrong item" in s["observation_received"].lower()
             or "task drift" in s["observation_received"].lower()
@@ -112,7 +95,6 @@ class SEALAgent:
         return bool(success and drift_seen)
 
     def execute(self, plan: str, env, rubric: str) -> dict:
-        """Executes the step trajectory while monitoring for loop anomalies."""
         self.steps_history = []
         self.consecutive_failures = 0
         goal, current_obs = env.reset()
@@ -121,31 +103,17 @@ class SEALAgent:
         max_steps = 10
         sequence_state = 0
 
-        # Read target and item from env.data — env.target / env.item are not
-        # attributes set by set_scenario(); only env.drift_item is. Reading
-        # from env.data["target"] / env.data["item"] is the correct accessor.
         target = env.data["target"]
         item = env.data["item"]
-        drift_item = env.drift_item  # set_scenario() sets this explicitly; safe to read directly
+        drift_item = env.drift_item
 
         while not done and step_count < max_steps:
             step_count += 1
             forced_outcome = env.data["forced_outcome"]
 
-            # Priority order matters:
-            # 1. CONTEXT_LOSS trap: keep sending "look" until rubric evolves with META-REFLECTION
-            # 2. GOAL_DRIFT trap: keep putting wrong item until rubric evolves with ITERATIVE-PROMPTING
-            #    NOTE: this branch must come BEFORE consecutive_failures recovery so the
-            #    recovery branch never silently swaps in the correct item and fakes a pass.
-            # 3. Recovery escape hatch (non-drift stagnation only)
-            # 4. Normal navigation sequence
             if forced_outcome == "CONTEXT_LOSS" and "META-REFLECTION" not in rubric:
                 action = "look"
             elif forced_outcome == "GOAL_DRIFT" and "ITERATIVE-PROMPTING" not in rubric:
-                # Always put the wrong item — consecutive_failures recovery is intentionally
-                # blocked here. If we let recovery fire, the agent would swap to the correct
-                # item after 2 stagnant steps, log a false SUCCESS, and the GOAL_DRIFT →
-                # iterative_prompting strategy path would never get exercised.
                 action = f"put {drift_item} in {target} 1"
             elif self.consecutive_failures >= 2:
                 action = f"put {item} in {target} 1"
@@ -164,13 +132,18 @@ class SEALAgent:
 
             next_obs, success = env.step(action, rubric)
 
-            # internal_loop_alert is Python None or a warning string — never the string "None"
-            internal_warning = None
-            if next_obs == current_obs:
+            # Fix: drift observations must not count as stagnation loops
+            is_drift_obs = (
+                "task drift" in next_obs.lower()
+                or "wrong item" in next_obs.lower()
+            )
+            
+            if next_obs == current_obs and not is_drift_obs:
                 self.consecutive_failures += 1
                 internal_warning = f"WARNING: Loop detected. Stagnation count: {self.consecutive_failures}."
             else:
                 self.consecutive_failures = 0
+                internal_warning = None
 
             self.steps_history.append({
                 "step": step_count,
@@ -184,28 +157,14 @@ class SEALAgent:
             if done:
                 break
 
-        final_outcome = "SUCCESS" if done else "FAILED"
-        detected_failure_type = self._detect_failure_type(done, self.steps_history)
-        drift_recovered = self._detect_drift_recovery(done, self.steps_history)
-
-        confidence_map = {
-            "NONE": 0.95,
-            "GOAL_DRIFT": 0.85,
-            "CONTEXT_LOSS": 0.35,
-            "EXECUTION_ERROR": 0.35,
-            "UNKNOWN": 0.50,
-        }
-        confidence_score = confidence_map.get(detected_failure_type, 0.50)
-        plan_coherence = compute_plan_coherence(plan)
-
         return {
             "task_goal": goal,
             "macro_plan": plan,
-            "plan_coherence": plan_coherence,
+            "plan_coherence": compute_plan_coherence(plan),
             "total_steps": step_count,
-            "final_outcome": final_outcome,
-            "detected_failure_type": detected_failure_type,
-            "drift_recovered": drift_recovered,
-            "agent_intrinsic_confidence": confidence_score,
-            "trajectory": self.steps_history,
+            "final_outcome": "SUCCESS" if done else "FAILED",
+            "detected_failure_type": self._detect_failure_type(done, self.steps_history),
+            "drift_recovered": self._detect_drift_recovery(done, self.steps_history),
+            "agent_intrinsic_confidence": 0.95 if done else 0.35,
+            "trajectory": self.steps_history
         }

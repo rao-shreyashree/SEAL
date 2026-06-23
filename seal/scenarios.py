@@ -34,23 +34,23 @@ class MultiScenarioALFWorldEnv:
         self.data = self.scenarios[self.scenario_id]
         self.steps = 0
         self.state_index = 0
-        
-        self.target = self.data["target"]
-        self.item = self.data["item"]
         self.drift_item = self.data.get("drift_item", "key ring")
+        self.drift_triggered = False  # Persistent environment memory flag
 
     def reset(self):
         self.steps = 0
         self.state_index = 0
-        return self.data["goal"], f"You are in the middle of a room. You see a {self.target} 1."
+        self.drift_triggered = False
+        return self.data["goal"], f"You are in the middle of a room. You see a {self.data['target']} 1."
 
     def step(self, action, rubric=""):
         self.steps += 1
         act = action.lower().strip()
-        target = self.target
-        item = self.item
+        target = self.data["target"]
+        item = self.data["item"]
         outcome = self.data["forced_outcome"]
 
+        # If a valid repair rubric is present, clear anomalies
         if "META-REFLECTION" in rubric or "ITERATIVE-PROMPTING" in rubric:
             outcome = "SUCCESS"
 
@@ -69,8 +69,12 @@ class MultiScenarioALFWorldEnv:
                 return f"You open the {target} 1. It is now open.", False
 
         if "put" in act or "place" in act or "examine" in act:
-            if outcome == "GOAL_DRIFT" and "ITERATIVE-PROMPTING" not in rubric:
-                return "You put the wrong item down. Task drift detected.", False
+            # Check for active or previous drift matches
+            if (outcome == "GOAL_DRIFT" and self.drift_item.split()[0] in act) or self.drift_triggered:
+                if "ITERATIVE-PROMPTING" not in rubric:
+                    self.drift_triggered = True  # Lock the anomaly into state memory
+                    return "You put the wrong item down. Task drift detected.", False
+
             if self.state_index == 2 or target in ["desk", "table", "counter", "shelf", "bed", "plate"]:
                 return f"Success! You completed the task sequence for {item} inside {target} 1.", True
 
