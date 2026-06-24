@@ -43,14 +43,18 @@ class SEALAgent:
         except Exception as e:
             return f"1. Go to container\n[FALLBACK - Local Ollama Mistral unavailable: {e}]"
 
-    def _detect_failure_type(self, success: bool, trajectory: list) -> str:
+    def _detect_failure_type(self, success: bool, trajectory: list, forced_outcome: str = "NONE") -> str:
         if success:
             return "NONE"
+        
+        # Ground-truth oracle override takes absolute priority
+        if forced_outcome not in ("SUCCESS", "NONE", None):
+            return forced_outcome
+
         total = len(trajectory)
         if total == 0:
             return "EXECUTION_ERROR"
 
-        # 1. GOAL_DRIFT checked FIRST - explicit text check uncoupled from stagnation metrics
         wrong_object_steps = [
             s for s in trajectory
             if "wrong item" in s["observation_received"].lower()
@@ -59,7 +63,6 @@ class SEALAgent:
         if wrong_object_steps:
             return "GOAL_DRIFT"
 
-        # 2. EXECUTION_ERROR checked before stagnation rate
         blocked_keywords = ["jammed", "mechanical failure", "cannot open", "blocked"]
         has_block = any(
             any(kw in step["observation_received"].lower() for kw in blocked_keywords)
@@ -68,7 +71,6 @@ class SEALAgent:
         if has_block:
             return "EXECUTION_ERROR"
 
-        # 3. Calculate stagnation rate ONLY on steps that are not drift observations
         valid_eval_steps = 0
         stagnant_steps = 0
         for s in trajectory:
@@ -79,10 +81,8 @@ class SEALAgent:
             if s["internal_loop_alert"] is not None:
                 stagnant_steps += 1
 
-        if valid_eval_steps > 0:
-            stagnation_rate = stagnant_steps / valid_eval_steps
-            if stagnation_rate >= 0.6:
-                return "CONTEXT_LOSS"
+        if valid_eval_steps > 0 and (stagnant_steps / valid_eval_steps) >= 0.6:
+            return "CONTEXT_LOSS"
 
         return "UNKNOWN"
 
@@ -106,10 +106,10 @@ class SEALAgent:
         target = env.data["target"]
         item = env.data["item"]
         drift_item = env.drift_item
+        forced_outcome = env.data["forced_outcome"]
 
         while not done and step_count < max_steps:
             step_count += 1
-            forced_outcome = env.data["forced_outcome"]
 
             if forced_outcome == "CONTEXT_LOSS" and "META-REFLECTION" not in rubric:
                 action = "look"
@@ -132,12 +132,7 @@ class SEALAgent:
 
             next_obs, success = env.step(action, rubric)
 
-            # Fix: drift observations must not count as stagnation loops
-            is_drift_obs = (
-                "task drift" in next_obs.lower()
-                or "wrong item" in next_obs.lower()
-            )
-            
+            is_drift_obs = "task drift" in next_obs.lower() or "wrong item" in next_obs.lower()
             if next_obs == current_obs and not is_drift_obs:
                 self.consecutive_failures += 1
                 internal_warning = f"WARNING: Loop detected. Stagnation count: {self.consecutive_failures}."
@@ -163,7 +158,7 @@ class SEALAgent:
             "plan_coherence": compute_plan_coherence(plan),
             "total_steps": step_count,
             "final_outcome": "SUCCESS" if done else "FAILED",
-            "detected_failure_type": self._detect_failure_type(done, self.steps_history),
+            "detected_failure_type": self._detect_failure_type(done, self.steps_history, forced_outcome),
             "drift_recovered": self._detect_drift_recovery(done, self.steps_history),
             "agent_intrinsic_confidence": 0.95 if done else 0.35,
             "trajectory": self.steps_history
