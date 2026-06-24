@@ -43,18 +43,14 @@ class SEALAgent:
         except Exception as e:
             return f"1. Go to container\n[FALLBACK - Local Ollama Mistral unavailable: {e}]"
 
-    def _detect_failure_type(self, success: bool, trajectory: list, forced_outcome: str = "NONE") -> str:
+    def _detect_failure_type(self, success: bool, trajectory: list) -> str:
         if success:
             return "NONE"
-        
-        # Ground-truth oracle override takes absolute priority
-        if forced_outcome not in ("SUCCESS", "NONE", None):
-            return forced_outcome
-
         total = len(trajectory)
         if total == 0:
             return "EXECUTION_ERROR"
 
+        # Shreyashree Order: GOAL_DRIFT -> EXECUTION_ERROR -> CONTEXT_LOSS
         wrong_object_steps = [
             s for s in trajectory
             if "wrong item" in s["observation_received"].lower()
@@ -115,8 +111,6 @@ class SEALAgent:
                 action = "look"
             elif forced_outcome == "GOAL_DRIFT" and "ITERATIVE-PROMPTING" not in rubric:
                 action = f"put {drift_item} in {target} 1"
-            elif self.consecutive_failures >= 2:
-                action = f"put {item} in {target} 1"
             elif sequence_state == 0:
                 action = f"go to {target} 1"
                 sequence_state = 1
@@ -125,7 +119,10 @@ class SEALAgent:
                 if forced_outcome != "EXECUTION_ERROR":
                     sequence_state = 2
             else:
-                if "examine" in goal.lower():
+                # Fixed: Fallback action preserves sequence status rather than overriding it
+                if self.consecutive_failures >= 2:
+                    action = f"put {item} in {target} 1"
+                elif "examine" in goal.lower():
                     action = f"examine {item} using {target} 1"
                 else:
                     action = f"put {item} in {target} 1"
@@ -158,7 +155,7 @@ class SEALAgent:
             "plan_coherence": compute_plan_coherence(plan),
             "total_steps": step_count,
             "final_outcome": "SUCCESS" if done else "FAILED",
-            "detected_failure_type": self._detect_failure_type(done, self.steps_history, forced_outcome),
+            "detected_failure_type": self._detect_failure_type(done, self.steps_history),
             "drift_recovered": self._detect_drift_recovery(done, self.steps_history),
             "agent_intrinsic_confidence": 0.95 if done else 0.35,
             "trajectory": self.steps_history
