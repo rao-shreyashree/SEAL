@@ -92,14 +92,19 @@ DEFAULT_RUBRIC = {
 def trace_to_str(raw_trace: list[dict]) -> str:
     """Adapter: TaskResult.raw_trace (List[dict]) -> the string evaluate() expects.
 
-    The notebook's evaluate() was built and tested against hand-formatted
-    "TASK: ... / Step N / OBS / ACT" strings, not raw step dicts. We don't
-    know the exact step dict keys Tanisha's agent.py produces, so this does
-    a generic, readable dump rather than assuming field names. Revisit if
-    the judge's accuracy suffers from a worse trace format than the
-    notebook's hand-built mock traces used.
+    Confirmed with Tanisha: each step dict has step (int), action_executed
+    (str), observation_received (str), and internal_loop_alert (str | None).
+    internal_loop_alert is intentionally dropped here -- noisy, degrades
+    judge context window, not needed for evaluation
+
+    Format matches the notebook's original hand-built "Step N / Action / Obs"
+    style the judge prompt was tuned against (see SESSION.md), replacing the
+    earlier generic json.dumps() placeholder
     """
-    return json.dumps(raw_trace, indent=2)
+    return "\n".join([
+        f"Step {s['step']}: Action -> '{s['action_executed']}' | Obs -> {s['observation_received']}"
+        for s in raw_trace
+    ])
 
 
 # judge 
