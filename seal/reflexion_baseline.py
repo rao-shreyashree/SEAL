@@ -12,11 +12,11 @@ class ReflexionBaseline:
             return 0.0
         return round(abs(len(current_rubric) - len(initial_rubric)) / len(initial_rubric), 4)
 
-    def _detect_failure_type(self, success: bool, trajectory: list, forced_outcome: str) -> str:
+    def _detect_failure_type(self, success: bool, trajectory: list, forced_outcome: str = "NONE") -> str:
         if success:
             return "NONE"
         
-        # Ground-truth override: If the environment forces a failure, match it explicitly
+        # Ground-truth oracle override takes absolute priority
         if forced_outcome not in ("SUCCESS", "NONE", None):
             return forced_outcome
 
@@ -99,7 +99,6 @@ class ReflexionBaseline:
 
                 next_obs, success = env.step(action, active_rubric)
 
-                # Ensure forced failure tracks run their full lifecycle for logging consistency
                 if forced_outcome not in ("SUCCESS", "NONE"):
                     success = False
 
