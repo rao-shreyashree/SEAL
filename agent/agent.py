@@ -73,6 +73,18 @@ class SEALAgent:
         if total == 0:
             return "EXECUTION_ERROR"
 
+        # GOAL_DRIFT checked first
+        # target-substitution is a stronger, more specific signal than stagnation rate.
+        # A drifted trajectory can ALSO look stagnant (agent retries around the wrong target), 
+        # so this must win the tie.
+        wrong_object_steps = [
+            s for s in trajectory
+            if "wrong item" in s["observation_received"].lower()
+            or "task drift" in s["observation_received"].lower()
+        ]
+        if wrong_object_steps:
+            return "GOAL_DRIFT"
+
         # Use boolean check correctly — internal_loop_alert is now None or a string warning
         stagnant = sum(
             1 for s in trajectory if s["internal_loop_alert"] is not None
@@ -89,15 +101,6 @@ class SEALAgent:
             obs = step["observation_received"].lower()
             if any(kw in obs for kw in blocked_keywords):
                 return "EXECUTION_ERROR"
-
-        # GOAL_DRIFT: target substitution divergence
-        wrong_object_steps = [
-            s for s in trajectory
-            if "wrong item" in s["observation_received"].lower()
-            or "task drift" in s["observation_received"].lower()
-        ]
-        if wrong_object_steps:
-            return "GOAL_DRIFT"
 
         return "UNKNOWN"
 
