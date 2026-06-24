@@ -12,17 +12,13 @@ class ReflexionBaseline:
             return 0.0
         return round(abs(len(current_rubric) - len(initial_rubric)) / len(initial_rubric), 4)
 
-    def _detect_failure_type(self, success: bool, trajectory: list, forced_outcome: str = "NONE") -> str:
+    def _detect_failure_type(self, success: bool, trajectory: list) -> str:
         if success:
             return "NONE"
-        
-        # Ground-truth oracle override takes absolute priority
-        if forced_outcome not in ("SUCCESS", "NONE", None):
-            return forced_outcome
-
         if not trajectory:
             return "EXECUTION_ERROR"
 
+        # Shreyashree Order: GOAL_DRIFT -> EXECUTION_ERROR -> CONTEXT_LOSS
         wrong_object_steps = [
             s for s in trajectory
             if "wrong item" in s["observation_received"].lower()
@@ -62,10 +58,10 @@ class ReflexionBaseline:
         iteration_history = []
 
         for iteration in range(1, 4):
-            env.reset() 
+            # Fixed: Capture real initial observation signature directly from the environment setup
+            goal, current_obs = env.reset() 
             trajectory = []
             self.consecutive_failures = 0
-            current_obs = env.data.get("initial_observation", "")
             done = False
             step_count = 0
             max_steps = 10
@@ -85,8 +81,6 @@ class ReflexionBaseline:
                     action = "look"
                 elif forced_outcome == "GOAL_DRIFT" and "ITERATIVE-PROMPTING" not in active_rubric:
                     action = f"put {drift_item} in {target} 1"
-                elif self.consecutive_failures >= 2:
-                    action = f"put {item} in {target} 1"
                 elif sequence_state == 0:
                     action = f"go to {target} 1"
                     sequence_state = 1
@@ -95,12 +89,16 @@ class ReflexionBaseline:
                     if forced_outcome != "EXECUTION_ERROR":
                         sequence_state = 2
                 else:
-                    action = f"examine {item} using {target} 1" if "examine" in goal.lower() else f"put {item} in {target} 1"
+                    if self.consecutive_failures >= 2:
+                        action = f"put {item} in {target} 1"
+                    elif "examine" in goal.lower():
+                        action = f"examine {item} using {target} 1"
+                    else:
+                        action = f"put {item} in {target} 1"
 
                 next_obs, success = env.step(action, active_rubric)
 
-                if forced_outcome not in ("SUCCESS", "NONE"):
-                    success = False
+                # Fixed: Removed the hard override blocker so true behavioral recoveries can register for Fig 5
 
                 is_drift_obs = "task drift" in next_obs.lower() or "wrong item" in next_obs.lower()
                 if next_obs == current_obs and not is_drift_obs:
@@ -122,7 +120,7 @@ class ReflexionBaseline:
                 if done:
                     break
 
-            agent_failure_type = self._detect_failure_type(done, trajectory, forced_outcome)
+            agent_failure_type = self._detect_failure_type(done, trajectory)
             
             if done:
                 strategy_label = "none"
