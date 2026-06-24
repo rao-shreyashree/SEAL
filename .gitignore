@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+# this is a stress test, so ill push later
+reflexion_baseline_stress_test.jsonl 
+fig1_success_by_iteration.png

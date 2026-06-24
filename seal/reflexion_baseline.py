@@ -159,7 +159,7 @@ class ReflexionBaseline:
  
 if __name__ == "__main__":
     # Quick manual smoke test - mirrors agent/run_agent.py's pattern
-    from agent.scenarios import MultiScenarioALFWorldEnv
+    from seal.scenarios import MultiScenarioALFWorldEnv
  
     env = MultiScenarioALFWorldEnv(scenario_id=4)  # CONTEXT_LOSS scenario
     baseline = ReflexionBaseline()
