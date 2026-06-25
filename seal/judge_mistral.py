@@ -1,49 +1,47 @@
 """
-seal/judge_mistral.py: SEALJudge (Mistral/HF backend) + JudgeFixed ablation baseline
+seal/judge_mistral.py: SEALJudge (Mistral/HF backend) + JudgeFixed
 
 extracted from notebook/Week2.ipynb (Anagha, origin/judge @ a771baa)
 
-STATUS: NOT SURE. 
-This is a second, independent SEALJudge implementation alongside seal/judge.py (Gemini backend, 
-from SEALjudge.ipynb @ 28273a3). Week2.ipynb does not modify or reference SEALjudge.ipynb 
-in any way - git diff 28273a3 a771baa confirms its a pure addition
-No commit message explains the relationship between the two
+STATUS UPDATE: evolve_rubric() now uses real cosine similarity
+(imported from seal.judge, not duplicated - one embedder/compute_drift_score
+implementation, shared) instead of returning a bare MD5 fingerprint
+Return shape now matches seal.judge.SEALJudge.evolve_rubric() exactly:
+(new_rubric, similarity_score, was_updated). 
+Old (rubric, hash) callers need to be updated to unpack 3 values (not 2)
 
-Working theory (NOT CONFIRMED - Anagha should tell me):
-    seal.judge.SEALJudge -> primary judge, SEAL condition
-    seal.judge_mistral.JudgeFixed -> ablation condition ("no-rubric-evolution" in the Day 5 ablation bar chart)
-
-If thats wrong and this was meant to replace seal/judge.py outright, the
-two files should be reconciled (most likely: i will delete this one, or merge the
-JudgeFixed ablation class into judge.py and drop the rest)
+Relationship to seal/judge.py (Gemini backend), i have now resolved:
+    
+    seal.judge.SEALJudge -> primary judge, SEAL condition (Gemini)
+    
+    seal.judge.JudgeFixed -> No-Rubric-Evolution ablation, Fig 5 (Gemini)
+    
+    seal.judge_mistral.SEALJudge / JudgeFixed -> Mistral/HF backend, kept as an OPTIONAL extra comparison point, 
+        NOT wired into Fig 5's ablation
+        
+    reason: Fig 5 must isolate exactly one variable (rubric evolution on/off).
+            a Mistral-backed JudgeFixed differs from SEAL's Gemini judge in two variables at once 
+            (model + evolution), which would confound the ablation
+            if we want to have a Mistral comparison, it will be a separate, explicitly-labeled 5th condition 
+            but not a substitute for the No-Rubric-Evolution bar
 
 Known integration gaps vs TaskResult (task_result.py, Tanisha):
 
     1. evaluate() returns a raw dict here, not EvalResult. Different shape
-        than seal.judge.SEALJudge.evaluate(). Any call site that handles both
-        judges needs to normalize this - see evaluate_to_result() below, added
-        here (not in the notebook) to paper over that gap
+        than seal.judge.SEALJudge.evaluate(). Use evaluate_to_result() below
+        to normalize before handing to any call site that treats both
+        judges uniformly.
 
-    2. evolve_rubric() returns (rubric, rubric_hash: str) - a fingerprint,
-        not a similarity float. This does NOT fill TaskResult.rubric_drift_score
-        (Optional[float]) directly. The hash tells whether the rubric
-        changed, not how much. A comment in the original notebook ("facilitate
-        Shreyashree's drift calculations") suggests the hash was meant as an
-        input to a downstream drift computation, not the final score - but
-        that downstream step doesnt exist yet. so i wont write this hash into
-        rubric_drift_score as-is; its the wrong type and wrong semantics
-
-    3. evaluate()'s exception path returns a dict with score/failure_type/
+    2. evaluate()'s exception path returns a dict with score/failure_type/
         explanation but no "dimension_scores" key at all (unlike seal.judge's
-        EvalResult, which defaults it to {})
+        EvalResult, which defaults it to {}). evaluate_to_result() papers
+        over this with .get(..., {}).
 
-    4. Requires HF_TOKEN env var (Colab secrets in the original) instead of
-        GEMINI_API_KEY. Different credential, different rate limits/quotas
+    3. Requires HF_TOKEN env var instead of GEMINI_API_KEY
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time
@@ -52,6 +50,11 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from huggingface_hub import InferenceClient
+
+# we reuse the one real drift-scoring implementation instead of duplicating it
+# compute_drift_score() requires sentence-transformers + scikit-learn
+# refer to seal/judge.py's import guard for the no-deps fallback behavior
+from seal.judge import compute_drift_score
 
 
 class FailureType(Enum):
@@ -103,11 +106,6 @@ class SEALJudge:
         self.client = InferenceClient(api_key=token)
         self.model_id = model_id
 
-    def _get_rubric_hash(self, rubric: Dict[str, Any]) -> str:
-        """Fingerprint, not a drift score. See module docstring point 2."""
-        rubric_string = json.dumps(rubric, sort_keys=True)
-        return hashlib.md5(rubric_string.encode("utf-8")).hexdigest()[:8]
-
     def evaluate(self, trace: str, rubric: Dict[str, Any]) -> Dict[str, Any]:
         user_message = f"""RUBRIC SPECIFICATION:
 {json.dumps(rubric, indent=2)}
@@ -147,11 +145,20 @@ Generate evaluation results adhering to this exact schema layout structure:
                     }
 
     def evolve_rubric(
-        self, rubric: Dict[str, Any], failure_history: List[Dict[str, Any]]
-    ) -> Tuple[Dict[str, Any], str]:
-        """Returns (new_rubric, rubric_hash). rubric_hash is a fingerprint,
-        NOT a drift similarity score - see module docstring point 2 before
-        wiring this into TaskResult.rubric_drift_score."""
+        self,
+        rubric: Dict[str, Any],
+        failure_history: List[Dict[str, Any]],
+        drift_floor: float = 0.45,
+    ) -> Tuple[Dict[str, Any], float, bool]:
+        """Returns (new_rubric, similarity_score, was_updated) - SAME SHAPE as
+        seal.judge.SEALJudge.evolve_rubric(). 
+        similarity_score is now cosine similarity (via seal.judge.compute_drift_score), not a hash
+
+        # critical section
+        # we do not change this return shape without updating seal.judge's
+        # equivalent too - callers (Tanisha's runner) rely on both judges
+        # being interchangeable here
+        """
         user_message = f"""CURRENT RUBRIC STRUCTURE:
 {json.dumps(rubric, indent=2)}
 
@@ -177,21 +184,43 @@ Return the modified rubric as a clean JSON dictionary matching the original root
             )
             raw_response = completion.choices[0].message.content.strip()
             new_rubric = json.loads(raw_response)
-            return new_rubric, self._get_rubric_hash(new_rubric)
         except Exception:
-            return rubric, self._get_rubric_hash(rubric)
+            # Fallback guardrail if the call or json parsing breaks - mirrors
+            # seal.judge's behavior of not silently advancing on a bad response
+            return rubric, 1.0, False
+
+        total_w = sum(v.get("weight", 0.0) for v in new_rubric.values())
+        if total_w and abs(total_w - 1.0) > 0.02:
+            for k in new_rubric:
+                new_rubric[k]["weight"] /= total_w
+
+        similarity = compute_drift_score(rubric, new_rubric)
+
+        if similarity < drift_floor:
+            print(
+                f"[BLOCKED] Semantic similarity {similarity:.3f} below floor "
+                f"{drift_floor}. Rubric mutation discarded."
+            )
+            return rubric, similarity, False
+
+        return new_rubric, similarity, True
 
 
 class JudgeFixed(SEALJudge):
-    """Ablation baseline: inherits evaluate(), but evolve_rubric() is a no-op.
-    Strong candidate for the "no-rubric-evolution" condition in the Day 5
-    ablation bar chart (SEAL vs no-rubric-evolution vs Reflexion vs zero-shot)
-    - unconfirmed, see module docstring."""
+    """Mistral-backed no-evolution judge.
+
+    NOT wired into Fig 5's ablation bar chart
+    Kept here only in case we later want an explicit, separately labeled Mistral-vs-Gemini comparison condition 
+    For the actual No-Rubric-Evolution bar, we use seal.judge.JudgeFixed instead
+    """
 
     def evolve_rubric(
-        self, rubric: Dict[str, Any], failure_history: List[Dict[str, Any]]
-    ) -> Tuple[Dict[str, Any], str]:
-        return rubric, self._get_rubric_hash(rubric)
+        self,
+        rubric: Dict[str, Any],
+        failure_history: List[Dict[str, Any]],
+        drift_floor: float = 0.45,
+    ) -> Tuple[Dict[str, Any], float, bool]:
+        return rubric, 1.0, False
 
 
 def evaluate_to_result(raw: Dict[str, Any]) -> EvalResult:
