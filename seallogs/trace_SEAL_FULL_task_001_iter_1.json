@@ -1,0 +1,45 @@
+{
+  "task_id": "task_001",
+  "iteration": 1,
+  "strategy_used": "1. Go to container\n2. Open container\n3. Place item\n[FALLBACK]",
+  "failure_type": "NONE",
+  "score": 1.0,
+  "success": true,
+  "rubric_version": 1,
+  "rubric_hash": "f5dca909",
+  "raw_trace": [
+    {
+      "step": 1,
+      "action_executed": "go to structure",
+      "observation_received": "Arrived.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 2,
+      "action_executed": "open structure",
+      "observation_received": "Opened.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 3,
+      "action_executed": "place item",
+      "observation_received": "Success! You completed the task sequence.",
+      "internal_loop_alert": null
+    }
+  ],
+  "task_description": "Task objective for scenario template configuration 0",
+  "oracle_failure_type": "SUCCESS",
+  "agent_confidence": 0.95,
+  "plan_coherence": 0.0,
+  "total_steps": 3,
+  "stagnation_step_count": 0,
+  "trajectory_stagnation_rate": 0.0,
+  "unique_action_count": 3,
+  "action_density_index": 1.0,
+  "judge_score": 1.0,
+  "judge_failure_type": "none",
+  "judge_explanation": "The agent successfully completed the task sequence with valid and efficient actions, as confirmed by the 'Success!' observation.",
+  "drift_recovered": false,
+  "strategy_label": "none",
+  "rubric_text": "{\n  \"goal_completion\": {\n    \"description\": \"Did the agent fully achieve the stated household task goal?\",\n    \"weight\": 0.35,\n    \"rules\": [\n      \"Verify the final state matches the explicit task objective instructions.\"\n    ]\n  },\n  \"action_validity\": {\n    \"description\": \"Were all actions syntactically valid and applied to correct objects?\",\n    \"weight\": 0.25,\n    \"rules\": [\n      \"Ensure the agent does not interact with items it hasn't picked up.\",\n      \"Verify actions use legal ALFWorld environment commands.\"\n    ]\n  },\n  \"context_retention\": {\n    \"description\": \"Did the agent remember all task constraints across all steps?\",\n    \"weight\": 0.2,\n    \"rules\": [\n      \"Check that state changes (e.g., heating, cooling) are executed before final placement.\"\n    ]\n  },\n  \"efficiency\": {\n    \"description\": \"Did the agent avoid unnecessary steps or backtracking?\",\n    \"weight\": 0.2,\n    \"rules\": [\n      \"Flag repetitive actions or loops moving between the same locations sequentially.\"\n    ]\n  }\n}"
+}

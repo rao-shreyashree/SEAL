@@ -1,0 +1,46 @@
+{
+  "task_id": "task_001",
+  "iteration": 1,
+  "strategy_used": "1. Go to container\n2. Open container\n3. Place item\n[FALLBACK \u2014 Mistral unavailable: You must provide an api_key to work with novita API or log in with `hf auth login`.]",
+  "failure_type": "NONE",
+  "score": 1.0,
+  "success": true,
+  "rubric_version": 1,
+  "rubric_hash": "99840c38",
+  "raw_trace": [
+    {
+      "step": 1,
+      "action_executed": "go to fridge 1",
+      "observation_received": "You arrive at fridge 1. The fridge 1 is closed.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 2,
+      "action_executed": "open fridge 1",
+      "observation_received": "You open the fridge 1. It is now open.",
+      "internal_loop_alert": null
+    },
+    {
+      "step": 3,
+      "action_executed": "put clean in fridge 1",
+      "observation_received": "Success! You completed the task sequence for apple inside fridge 1.",
+      "internal_loop_alert": null
+    }
+  ],
+  "task_description": "Put a clean apple inside the fridge.",
+  "oracle_failure_type": "SUCCESS",
+  "agent_confidence": 0.95,
+  "plan_coherence": 0.0,
+  "total_steps": 3,
+  "judge_score": null,
+  "judge_failure_type": null,
+  "judge_explanation": null,
+  "rubric_drift_score": null,
+  "stagnation_step_count": 0,
+  "trajectory_stagnation_rate": 0.0,
+  "unique_action_count": 3,
+  "action_density_index": 1.0,
+  "drift_recovered": false,
+  "strategy_label": "none",
+  "rubric_text": "Always approach structures sequentially. Verify containers are open before placement."
+}
