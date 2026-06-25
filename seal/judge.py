@@ -272,6 +272,33 @@ Return a JSON object following this exact schema structure:
         return new_rubric, similarity, True
 
 
+class JudgeFixed(SEALJudge):
+    """Ablation baseline: No-Rubric-Evolution condition for Fig 5.
+
+    # critical section
+    # do not change without discussing with the team
+    # This subclasses SEALJudge (Gemini) on purpose, NOT judge_mistral.SEALJudge (Mistral/HF)
+    # The ablation in Fig 5 is only valid if SEAL and No-Rubric-Evolution differ in exactly one variable: 
+    # whether evolve_rubric() actually mutates the rubric
+    # Using a different judge model here would confound "rubric evolution on/off" with
+    # "different LLM backend" and invalidate the ablation bar chart
+
+    evaluate() is inherited unchanged (still Gemini)
+    evolve_rubric() is overridden to be a true no-op: returns the input rubric, similarity 1.0
+    (identical) and was_updated=False
+    so rubric_hash and rubric_drift_score stay flat across iterations
+    the same way reflexion's BASELINE_RUBRIC does
+    """
+
+    def evolve_rubric(
+        self,
+        rubric: dict,
+        failure_history: list[EvalResult],
+        drift_floor: float = 0.45,
+    ) -> tuple[dict, float, bool]:
+        return rubric, 1.0, False
+
+
 # rubric drift scoring 
 # fills TaskResult.rubric_drift_score. Requires sentence-transformers + sklearn,
 # which aren't in the base SEAL deps yet - guarded import so this module is
