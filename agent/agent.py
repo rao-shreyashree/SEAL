@@ -61,11 +61,19 @@ class SEALAgent:
         except Exception as e:
             return (
                 f"1. Go to container\n2. Open container\n3. Place item\n"
-                f"[FALLBACK — Mistral unavailable: {e}]"
+                f"[FALLBACK - Mistral unavailable: {e}]"
             )
 
     def _detect_failure_type(self, success: bool, trajectory: list) -> str:
-        """Intrinsic failure diagnostic engine (independent from environmental oracle)."""
+        """Intrinsic failure diagnostic engine (independent from environmental oracle).
+
+        # critical section
+        # do not change this priority order without discussing with the team
+        # Decided priority when signals overlap: GOAL_DRIFT > EXECUTION_ERROR > CONTEXT_LOSS
+        # GOAL_DRIFT and EXECUTION_ERROR are both explicit keyword signals
+        # and outrank CONTEXT_LOSS's inferred stagnation-rate heuristic
+        # since a drifted or blocked trajectory can ALSO look stagnant
+        """
         if success:
             return "NONE"
 
@@ -73,10 +81,8 @@ class SEALAgent:
         if total == 0:
             return "EXECUTION_ERROR"
 
-        # GOAL_DRIFT checked first
-        # target-substitution is a stronger, more specific signal than stagnation rate.
-        # A drifted trajectory can ALSO look stagnant (agent retries around the wrong target), 
-        # so this must win the tie.
+        # 1. GOAL_DRIFT: target-substitution is a stronger, more specific signal
+        # than stagnation rate. so we check it first
         wrong_object_steps = [
             s for s in trajectory
             if "wrong item" in s["observation_received"].lower()
@@ -85,22 +91,24 @@ class SEALAgent:
         if wrong_object_steps:
             return "GOAL_DRIFT"
 
-        # Use boolean check correctly — internal_loop_alert is now None or a string warning
-        stagnant = sum(
-            1 for s in trajectory if s["internal_loop_alert"] is not None
-        )
-        stagnation_rate = stagnant / total
-
-        # CONTEXT_LOSS: agent trapped in non-mutating state loop
-        if stagnation_rate >= 0.6:
-            return "CONTEXT_LOSS"
-
-        # EXECUTION_ERROR: environmental dependency block via string parsing
+        # 2. EXECUTION_ERROR: explicit blocked-keyword signal, checked BEFORE
+        # the stagnation-rate check so a trajectory that is both stagnant and
+        # contains a blocked-keyword observation returns EXECUTION_ERROR
         blocked_keywords = ["jammed", "mechanical failure", "cannot open", "blocked"]
         for step in trajectory:
             obs = step["observation_received"].lower()
             if any(kw in obs for kw in blocked_keywords):
                 return "EXECUTION_ERROR"
+
+        # 3. CONTEXT_LOSS: inferred rate-based heuristic, checked last
+        # internal_loop_alert is now None or a string warning
+        stagnant = sum(
+            1 for s in trajectory if s["internal_loop_alert"] is not None
+        )
+        stagnation_rate = stagnant / total
+
+        if stagnation_rate >= 0.6:
+            return "CONTEXT_LOSS"
 
         return "UNKNOWN"
 
@@ -158,7 +166,7 @@ class SEALAgent:
             next_obs, success = env.step(action)
 
             # internal_loop_alert is None (Python None) or a warning string
-            # IMPORTANT: use None not the string "None" so teammates can do truthiness checks safely
+            # IMPORTANT: use None not the string "None"
             internal_warning = None
             if next_obs == current_obs:
                 self.consecutive_failures += 1
@@ -170,7 +178,7 @@ class SEALAgent:
                 "step": step_count,
                 "action_executed": action,
                 "observation_received": next_obs,
-                "internal_loop_alert": internal_warning,  # None or string — NOT the string "None"
+                "internal_loop_alert": internal_warning,
             })
 
             current_obs = next_obs
