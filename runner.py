@@ -79,7 +79,9 @@ class SEALRunner:
                 rubric_hash=make_rubric_hash(rubric_string_representation),
                 raw_trace=trajectory,
                 task_description=goal,
-                oracle_failure_type=self.env.data["forced_outcome"],
+                # Normalize: env uses "SUCCESS" string; contract field uses "NONE" on success
+                # "SUCCESS" as oracle_failure_type breaks Fig 2 grouping for successful tasks
+                oracle_failure_type="NONE" if self.env.data["forced_outcome"] == "SUCCESS" else self.env.data["forced_outcome"],
                 agent_confidence=trace_output["agent_intrinsic_confidence"],
                 plan_coherence=trace_output["plan_coherence"],
                 total_steps=total_steps,

@@ -8,31 +8,13 @@ if root_path not in sys.path:
     sys.path.insert(0, root_path)
 
 from seal.task_result import TaskResult, make_rubric_hash
+from seal.scenarios import MultiScenarioALFWorldEnv
 from agent.agent import SEALAgent
-
-class MockALFWorldEnv:
-    def __init__(self):
-        self.current_scenario = 0
-        self.data = {"forced_outcome": "SUCCESS"}
-
-    def set_scenario(self, scenario_id: int):
-        self.current_scenario = scenario_id
-        if scenario_id == 4 or scenario_id == 19:
-            self.data["forced_outcome"] = "CONTEXT_LOSS"
-        elif scenario_id == 9:
-            self.data["forced_outcome"] = "GOAL_DRIFT"
-        elif scenario_id == 14:
-            self.data["forced_outcome"] = "EXECUTION_ERROR"
-        else:
-            self.data["forced_outcome"] = "SUCCESS"
-
-    def reset(self):
-        return f"Task objective for scenario template configuration {self.current_scenario}", {}
 
 class ReflexionBaselineRunner:
     def __init__(self):
         self.agent = SEALAgent()
-        self.env = MockALFWorldEnv()
+        self.env = MultiScenarioALFWorldEnv()
 
     def run(self, env, task_id: str) -> list:
         goal, _ = env.reset()
@@ -67,7 +49,8 @@ class ReflexionBaselineRunner:
                 rubric_hash=make_rubric_hash(active_rubric),
                 raw_trace=trajectory,
                 task_description=goal,
-                oracle_failure_type=env.data["forced_outcome"],
+                # Normalize: env uses "SUCCESS" string; contract field uses "NONE" on success
+                oracle_failure_type="NONE" if env.data["forced_outcome"] == "SUCCESS" else env.data["forced_outcome"],
                 agent_confidence=0.95,
                 plan_coherence=0.0,
                 total_steps=total_steps,
@@ -89,7 +72,7 @@ class ReflexionBaselineRunner:
 
 def run_stress_test():
     NUM_SCENARIOS = 20
-    env = MockALFWorldEnv()
+    env = MultiScenarioALFWorldEnv()
     baseline = ReflexionBaselineRunner()
     all_results = []
 
