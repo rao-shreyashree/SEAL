@@ -91,21 +91,26 @@ DEFAULT_RUBRIC = {
 
 def trace_to_str(raw_trace: list[dict]) -> str:
     """Adapter: TaskResult.raw_trace (List[dict]) -> the string evaluate() expects.
-
-    Confirmed with Tanisha: each step dict has step (int), action_executed
-    (str), observation_received (str), and internal_loop_alert (str | None).
-    internal_loop_alert is intentionally dropped here -- noisy, degrades
-    judge context window, not needed for evaluation
+    Tolerant of key naming: checks action_executed/observation_received first,
+    falls back to action/observation if present, and falls back to the loop
+    index if 'step' is missing. 
+    internal_loop_alert is intentionally dropped here -- noisy, degrades judge context window, not needed for evaluation
 
     Format matches the notebook's original hand-built "Step N / Action / Obs"
-    style the judge prompt was tuned against (see SESSION.md), replacing the
-    earlier generic json.dumps() placeholder
+    style the judge prompt was tuned against, replacing the earlier generic json.dumps() placeholder
     """
-    return "\n".join([
-        f"Step {s['step']}: Action -> '{s['action_executed']}' | Obs -> {s['observation_received']}"
-        for s in raw_trace
-    ])
+    lines = []
 
+    for i, s in enumerate(raw_trace, start=1):
+        step = s.get("step", i)
+        action = s.get("action_executed", s.get("action", ""))
+        obs = s.get("observation_received", s.get("observation", ""))
+
+        lines.append(
+            f"Step {step}: Action -> '{action}' | Obs -> {obs}"
+        )
+
+    return "\n".join(lines)
 
 # judge 
 class SEALJudge:
