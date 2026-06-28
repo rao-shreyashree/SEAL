@@ -1,0 +1,200 @@
+{
+  "all_results": [
+    {
+      "trace_id": 0,
+      "goal": "Put a chilled lettuce in the refrigerator.",
+      "ground_truth_success": true,
+      "score": 1.0,
+      "failure_type": null,
+      "explanation": "The agent successfully completed the task by picking up the lettuce, chilling it, and placing it in the refrigerator without any errors or inefficiencies.",
+      "dimension_scores": {
+        "goal_completion": 1.0,
+        "action_validity": 1.0,
+        "context_retention": 1.0,
+        "efficiency": 1.0
+      },
+      "rubric_version": 0
+    },
+    {
+      "trace_id": 1,
+      "goal": "Clean a mug and put it on the coffee table.",
+      "ground_truth_success": true,
+      "score": 1.0,
+      "failure_type": null,
+      "explanation": "The agent successfully completed the task by cleaning the mug and placing it on the coffee table, demonstrating valid actions, good context retention, and an efficient execution path.",
+      "dimension_scores": {
+        "goal_completion": 1.0,
+        "action_validity": 1.0,
+        "context_retention": 1.0,
+        "efficiency": 1.0
+      },
+      "rubric_version": 0
+    },
+    {
+      "trace_id": 2,
+      "goal": "Put a hot apple in the fridge.",
+      "ground_truth_success": false,
+      "score": 0.45,
+      "failure_type": "context_loss",
+      "explanation": "The agent failed to heat the apple as required by the task, despite an explicit observation reminding it to do so, leading to a critical goal completion failure.",
+      "dimension_scores": {
+        "goal_completion": 0.0,
+        "action_validity": 1.0,
+        "context_retention": 0.0,
+        "efficiency": 1.0
+      },
+      "rubric_version": 0
+    },
+    {
+      "trace_id": 3,
+      "goal": "Stack a book on the desk, then put a pen on the book.",
+      "ground_truth_success": false,
+      "score": 0.45,
+      "failure_type": "goal_drift",
+      "explanation": "The agent successfully completed the first part of the task by placing the book on the desk. However, it failed the second part by picking an eraser instead of a pen and placing it on the desk instead of on the book, indicating a significant deviation from the goal.",
+      "dimension_scores": {
+        "goal_completion": 0.0,
+        "action_validity": 1.0,
+        "context_retention": 0.0,
+        "efficiency": 1.0
+      },
+      "rubric_version": 0
+    },
+    {
+      "trace_id": 4,
+      "goal": "Put a cooled potato in the microwave.",
+      "ground_truth_success": false,
+      "score": 0.65,
+      "failure_type": "goal_drift",
+      "explanation": "The agent successfully cooled the potato but failed to place it in the correct final location, putting it on the stoveburner instead of the microwave.",
+      "dimension_scores": {
+        "goal_completion": 0.0,
+        "action_validity": 1.0,
+        "context_retention": 1.0,
+        "efficiency": 1.0
+      },
+      "rubric_version": 0
+    },
+    {
+      "trace_id": 5,
+      "goal": "Examine a credit card using the floorlamp.",
+      "ground_truth_success": false,
+      "score": 0.45,
+      "failure_type": "context_loss",
+      "explanation": "The agent failed to fully complete the task because it did not turn on the floorlamp, which was necessary to 'use' it for examining the credit card, indicating a loss of task context.",
+      "dimension_scores": {
+        "goal_completion": 0.0,
+        "action_validity": 1.0,
+        "context_retention": 0.0,
+        "efficiency": 1.0
+      },
+      "rubric_version": 1
+    },
+    {
+      "trace_id": 6,
+      "goal": "Put two pillows on the armchair.",
+      "ground_truth_success": false,
+      "score": 0.4,
+      "failure_type": "execution_error",
+      "explanation": "The agent only placed one of the two required pillows and then entered a loop of repeatedly going to the bed, failing to pick up the second pillow and complete the task.",
+      "dimension_scores": {
+        "goal_completion": 0.0,
+        "action_validity": 1.0,
+        "context_retention": 0.75,
+        "efficiency": 0.0
+      },
+      "rubric_version": 1
+    }
+  ],
+  "drift_log": [
+    {
+      "after_trace": 5,
+      "drift": 0.9287739992141724,
+      "updated": true
+    }
+  ],
+  "rubric_versions": [
+    {
+      "version": 0,
+      "rubric": {
+        "goal_completion": {
+          "description": "Did the agent fully achieve the stated household task goal?",
+          "weight": 0.35,
+          "rules": [
+            "Verify the final state matches the explicit task objective instructions."
+          ]
+        },
+        "action_validity": {
+          "description": "Were all actions syntactically valid and applied to correct objects?",
+          "weight": 0.25,
+          "rules": [
+            "Ensure the agent does not interact with items it hasn't picked up.",
+            "Verify actions use legal ALFWorld environment commands."
+          ]
+        },
+        "context_retention": {
+          "description": "Did the agent remember all task constraints across all steps?",
+          "weight": 0.2,
+          "rules": [
+            "Check that state changes (e.g., heating, cooling) are executed before final placement."
+          ]
+        },
+        "efficiency": {
+          "description": "Did the agent avoid unnecessary steps or backtracking?",
+          "weight": 0.2,
+          "rules": [
+            "Flag repetitive actions or loops moving between the same locations sequentially."
+          ]
+        }
+      }
+    },
+    {
+      "version": 1,
+      "rubric": {
+        "goal_completion": {
+          "description": "Did the agent fully achieve the stated household task goal?",
+          "weight": 0.35,
+          "rules": [
+            "Verify the final state matches the explicit task objective instructions, including all specified objects and their final locations.",
+            "Ensure all specified objects are correctly identified and interacted with according to the task instructions (e.g., picking the correct item, not a substitute).",
+            "Confirm objects are placed in their exact specified final locations and relative positions (e.g., 'on the book' vs. 'on the desk', 'on stoveburner' vs. 'in microwave')."
+          ]
+        },
+        "action_validity": {
+          "description": "Were all actions syntactically valid and applied to correct objects?",
+          "weight": 0.25,
+          "rules": [
+            "Ensure the agent does not interact with items it hasn't picked up.",
+            "Verify actions use legal ALFWorld environment commands."
+          ]
+        },
+        "context_retention": {
+          "description": "Did the agent remember all task constraints across all steps?",
+          "weight": 0.2,
+          "rules": [
+            "Verify all required state changes (e.g., heating, cooling, cleaning) are performed on objects before their final placement, even if explicit observations remind the agent."
+          ]
+        },
+        "efficiency": {
+          "description": "Did the agent avoid unnecessary steps or backtracking?",
+          "weight": 0.2,
+          "rules": [
+            "Flag repetitive actions or loops moving between the same locations sequentially."
+          ]
+        }
+      },
+      "after_trace": 5
+    }
+  ],
+  "summary": {
+    "mean_score": 0.6285714285714287,
+    "judge_accuracy": 1.0,
+    "failure_distribution": {
+      "null": 2,
+      "context_loss": 2,
+      "goal_drift": 2,
+      "execution_error": 1
+    },
+    "n_rubric_updates": 1
+  }
+}
