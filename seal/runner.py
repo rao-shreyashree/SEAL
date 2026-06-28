@@ -108,9 +108,6 @@ class SEALRunner:
                 break
 
             if not is_success and iteration < 3:
-                # skip evolve_rubric() on the final iteration 
-                # its output would never be used (loop ends after iteration 3 anyway)
-                # this saves 1 API call per failed task
                 try:
                     new_rubric, similarity_score, was_updated = self.judge.evolve_rubric(
                         rubric=active_rubric, 
@@ -127,11 +124,11 @@ class SEALRunner:
 
 def run_comprehensive_suite():
     # 50-task full run, no scope reduction
-    total_scenarios = 50 # 5 will produce a partial run. our benchmark is 50 tasks 
+    total_scenarios = 50  # 5 will produce a partial run. our benchmark is 50 tasks
     runner = SEALRunner(condition="SEAL_FULL")
     all_results = {}
-    
-    # removed the request cap to allow complete benchmark evaluation
+
+    # No request cap — allow complete benchmark evaluation
     request_count = 0
     print("=== Launching SEAL Runner Production Benchmark ===")
     for sid in range(total_scenarios):
