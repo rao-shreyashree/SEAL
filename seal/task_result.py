@@ -1,5 +1,5 @@
 """
-task_result.py — Shared integration contract for SEAL project.
+seal/task_result.py - Shared integration contract for SEAL project.
 everyone import TaskResult from here.
 
 
@@ -19,7 +19,7 @@ class TaskResult:
     # ── Core contract fields (all required) ──────────────────────────────────
     task_id: str
     iteration: int
-    strategy_used: str          # Mistral-generated action plan text
+    strategy_used: str          # Mistral-generated action plan text - raw plan, NOT a strategy label (use strategy_label below for Fig 3/4)
     failure_type: str           # Agent-detected: NONE|CONTEXT_LOSS|GOAL_DRIFT|EXECUTION_ERROR|UNKNOWN
     score: float                # 0.0 or 1.0 (binary for now; judge can write fractional here)
     success: bool
@@ -45,6 +45,25 @@ class TaskResult:
     trajectory_stagnation_rate: float = 0.0
     unique_action_count: int = 0
     action_density_index: float = 0.0
+
+    # New additive fields (taken from Tanisha's file)
+    # All default-valued so old JSON files / existing call sites without
+    # these keys still construct fine via from_dict().
+
+    # Behavioral drift-recovery flag. Confirm with Tanisha exactly how this
+    # is computed in whichever runner/baseline sets it - must reflect real
+    # agent behavior, not just oracle/iteration bookkeeping.
+    drift_recovered: bool = False
+
+    # one of "meta_reflection" | "iterative_prompting" | "none"
+    # Written by SEALRunner / ReflexionEvolving. SEPARATE from strategy_used
+    # (raw plan text). Shreyashree's figures.py reads THIS for Fig 3/Fig 4.
+    strategy_label: str = "none"
+
+    # Full rubric TEXT active for this iteration (not just hash). Lets
+    # Shreyashree compute rubric_drift_score by diffing across iter 1->3
+    # for conditions that don't go through SEALJudge.evolve_rubric().
+    rubric_text: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)

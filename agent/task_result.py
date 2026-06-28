@@ -1,5 +1,5 @@
 """
-task_result.py - Shared integration contract for SEAL project.
+agent/task_result.py - Shared integration contract for SEAL project.
 everyone import TaskResult from here.
 
 
