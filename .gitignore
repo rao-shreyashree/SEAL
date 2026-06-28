@@ -4,7 +4,7 @@ __pycache__/
 reflexion_baseline_stress_test.jsonl 
 # after writing functions for all 5 figures, ill push these
 fig1_success_by_iteration.png
-seal/figures.py 
 # smoke test and its results to be pushed later
 smoke_test_small.py
 seallogs_smoke/
+sanity_check.py
