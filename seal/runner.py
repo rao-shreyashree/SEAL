@@ -107,7 +107,10 @@ class SEALRunner:
             if is_success:
                 break
 
-            if not is_success:
+            if not is_success and iteration < 3:
+                # skip evolve_rubric() on the final iteration 
+                # its output would never be used (loop ends after iteration 3 anyway)
+                # this saves 1 API call per failed task
                 try:
                     new_rubric, similarity_score, was_updated = self.judge.evolve_rubric(
                         rubric=active_rubric, 

@@ -118,13 +118,27 @@ class SEALJudge:
         self,
         model_name: str = "gemini-2.5-flash",
         api_key: Optional[str] = None,
+        api_keys: Optional[list[str]] = None,
         max_retries: int = 5,
         backoff_time: float = 12.0,
     ):
-        self.client = genai.Client(api_key=api_key or os.environ.get("GEMINI_API_KEY"))
+        # api_keys: list for rotation on quota exhaustion
+        # Falls back to single api_key/GEMINI_API_KEY if not provided, for backward compatibility
+        self._keys = api_keys or [api_key or os.environ.get("GEMINI_API_KEY")]
+        self._key_index = 0
+        self.client = genai.Client(api_key=self._keys[self._key_index])
         self.model_name = model_name
         self.max_retries = max_retries
         self.backoff_time = backoff_time
+
+    def _rotate_key(self) -> bool:
+        """Switch to the next available API key. Returns False if none left."""
+        if self._key_index + 1 >= len(self._keys):
+            return False
+        self._key_index += 1
+        self.client = genai.Client(api_key=self._keys[self._key_index])
+        print(f"[KEY ROTATION] Switched to key index {self._key_index}.")
+        return True
 
     def _call_with_retry(self, prompt: str, temperature: float, log_label: str) -> str:
         """Shared retry/backoff wrapper for both evaluate() and evolve_rubric().
@@ -148,6 +162,9 @@ class SEALJudge:
                 )
                 break
             except (ClientError, ServerError) as e:
+                is_quota_error = getattr(e, "status_code", None) == 429
+                if is_quota_error and self._rotate_key():
+                    continue  # retry immediately on the new key
                 if attempt < self.max_retries - 1:
                     print(
                         f"\n[RETRY:{log_label}] {type(e).__name__} "
