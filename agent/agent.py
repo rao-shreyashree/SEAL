@@ -33,31 +33,33 @@ class SEALAgent:
     def __init__(self, hf_token=None):
         token = hf_token or os.environ.get("HF_TOKEN")
         self.client = InferenceClient(
-            model="mistralai/Mistral-7B-Instruct-v0.3",
-            token=token,
+            api_key=token,
         )
         self.steps_history = []
         self.consecutive_failures = 0
 
     def plan(self, task: str, rubric: str) -> str:
         """Calls Mistral 7B to generate a structured CoT action plan."""
-        prompt = (
-            f"[INST] You are a household task planning agent.\n"
+        system_prompt = "You are a household task planning agent."
+        user_message = (
             f"Rubric: {rubric}\n"
             f"Task: {task}\n\n"
             f"Produce a numbered step-by-step action plan to complete this task. "
             f"Each step must be a single executable action such as "
             f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
-            f"Output ONLY the numbered plan, no preamble. [/INST]"
+            f"Output ONLY the numbered plan, no preamble."
         )
         try:
-            response = self.client.text_generation(
-                prompt,
-                max_new_tokens=256,
+            completion = self.client.chat.completions.create(
+                model="mistralai/Mistral-Nemo-Instruct-2407",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
                 temperature=0.3,
-                do_sample=True,
+                max_tokens=256,
             )
-            return response.strip()
+            return completion.choices[0].message.content.strip()
         except Exception as e:
             return (
                 f"1. Go to container\n2. Open container\n3. Place item\n"
@@ -199,6 +201,15 @@ class SEALAgent:
         confidence_score = confidence_map.get(detected_failure_type, 0.50)
         plan_coherence = compute_plan_coherence(plan)
 
+        # Behavioral drift recovery: 
+        # did the agent initially drift to the wrong item, then later place the correct item in the same trajectory?
+        drifted_at_some_step = any(
+            "wrong item" in s["observation_received"].lower()
+            or "task drift" in s["observation_received"].lower()
+            for s in self.steps_history
+        )
+        drift_recovered = bool(drifted_at_some_step and done)
+
         return {
             "task_goal": goal,
             "macro_plan": plan,
@@ -208,4 +219,5 @@ class SEALAgent:
             "detected_failure_type": detected_failure_type,
             "agent_intrinsic_confidence": confidence_score,
             "trajectory": self.steps_history,
+            "drift_recovered": drift_recovered,
         }
