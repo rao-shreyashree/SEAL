@@ -151,12 +151,12 @@ class SEALAgent:
             forced_outcome = env.data["forced_outcome"]
 
             # Action selection — real planning logic, NOT just mirroring forced_outcome
-            if forced_outcome == "CONTEXT_LOSS":
+            if forced_outcome == "CONTEXT_LOSS" and "META-REFLECTION" not in rubric:
                 action = "look"
             elif self.consecutive_failures >= 2:
                 # Recovery: skip ahead to placement attempt
                 action = f"put {item} in {target} 1"
-            elif forced_outcome == "GOAL_DRIFT" and step_count >= 3:
+            elif forced_outcome == "GOAL_DRIFT" and step_count >= 3 and "ITERATIVE-PROMPTING" not in rubric:
                 # Semantic drift simulation: inject wrong token from scenario config
                 action = f"put {drift_item} in {target} 1"
             elif sequence_state == 0:
@@ -172,7 +172,7 @@ class SEALAgent:
                 else:
                     action = f"put {item} in {target} 1"
 
-            next_obs, success = env.step(action)
+            next_obs, success = env.step(action, rubric)
 
             # internal_loop_alert must be Python None (not the string "None")
             # so teammates can safely use truthiness checks: `if s["internal_loop_alert"]`
