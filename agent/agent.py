@@ -39,7 +39,7 @@ class SEALAgent:
         self.consecutive_failures = 0
 
     def plan(self, task: str, rubric: str) -> str:
-        """Calls Mistral 7B to generate a structured CoT action plan."""
+        """Calls Mistral-Nemo chat model to generate a structured step-by-step action plan."""
         system_prompt = "You are a household task planning agent."
         user_message = (
             f"Rubric: {rubric}\n"
