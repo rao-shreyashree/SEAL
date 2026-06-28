@@ -123,32 +123,28 @@ class SEALRunner:
         return task_iteration_history, calls_made
 
 def run_comprehensive_suite():
-    # Option 1 applied: Reduced default target scenario scope to safe evaluation limits
-    total_scenarios = 5 
+    # 50-task full run, no scope reduction
+    total_scenarios = 50  # 5 will produce a partial run. our benchmark is 50 tasks
     runner = SEALRunner(condition="SEAL_FULL")
     all_results = {}
-    
-    # Option 2 applied: Strict request counter floor limit guard rails
-    request_count = 0
-    MAX_REQUESTS = 18  
 
-    print("=== Launching Bounded SEAL Runner Production Benchmark ===")
+    # No request cap — allow complete benchmark evaluation
+    request_count = 0
+    print("=== Launching SEAL Runner Production Benchmark ===")
     for sid in range(total_scenarios):
-        if request_count >= MAX_REQUESTS:
-            print(f"\n[SAFE EXIT] Quota threshold ceiling reached ({request_count} calls made). Stopping execution safely.")
-            break
-            
         try:
             results, calls = runner.run_task_lifecycle(scenario_id=sid)
             request_count += calls
             all_results[f"task_{str(sid+1).zfill(3)}"] = [r.to_dict() for r in results]
-            time.sleep(0.1)
+            time.sleep(3)
         except Exception as e:
             print(f"Skipping scenario index {sid}: {e}")
             
     with open(os.path.join(runner.output_dir, "production_runner_summary.json"), "w") as f:
         json.dump(all_results, f, indent=2)
     print(f"\nEvaluation summary written cleanly to {runner.output_dir}/production_runner_summary.json")
+    print(f"\nTotal judge calls: {request_count}")
 
 if __name__ == "__main__":
     run_comprehensive_suite()
+    
