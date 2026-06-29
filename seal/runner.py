@@ -107,7 +107,12 @@ class SEALRunner:
             if is_success:
                 break
 
-            if not is_success and iteration < 3:
+            # evolve only every 2nd failure (skip iteration 1's evolve call)
+            # cuts evolve calls 2->1 per failing task
+            # evaluate() is NEVER skipped
+            # NOTE: this changes what iteration-2 TaskResult.rubric_text reflects 
+            # (no evolve happened before iter 2 anymore)
+            if not is_success and iteration < 3 and iteration >= 2:
                 try:
                     new_rubric, similarity_score, was_updated = self.judge.evolve_rubric(
                         rubric=active_rubric, 
@@ -122,27 +127,40 @@ class SEALRunner:
 
         return task_iteration_history, calls_made
 
-def run_comprehensive_suite():
+def run_comprehensive_suite(max_calls: int = 200):
     # 50-task full run, no scope reduction
+    # max_calls is a quota guard, not a scope cut 
+    # stops the run before
+    # burning through Gemini key rotation budget
+    
     total_scenarios = 50  # 5 will produce a partial run. our benchmark is 50 tasks
     runner = SEALRunner(condition="SEAL_FULL")
     all_results = {}
+    per_task_calls = {}  # visibility into calls/task, not just one final total
 
-    # No request cap — allow complete benchmark evaluation
     request_count = 0
     print("=== Launching SEAL Runner Production Benchmark ===")
     for sid in range(total_scenarios):
+        if request_count >= max_calls:
+            print(f"[STOPPED] Hit max_calls budget ({max_calls}) at scenario index {sid}. "
+                  f"Remaining scenarios not run - rotate keys or raise max_calls to continue.")
+            break
         try:
             results, calls = runner.run_task_lifecycle(scenario_id=sid)
             request_count += calls
-            all_results[f"task_{str(sid+1).zfill(3)}"] = [r.to_dict() for r in results]
+            task_key = f"task_{str(sid+1).zfill(3)}"
+            all_results[task_key] = [r.to_dict() for r in results]
+            per_task_calls[task_key] = calls
             time.sleep(3)
         except Exception as e:
             print(f"Skipping scenario index {sid}: {e}")
-            
+
     with open(os.path.join(runner.output_dir, "production_runner_summary.json"), "w") as f:
         json.dump(all_results, f, indent=2)
+    with open(os.path.join(runner.output_dir, "production_call_counts.json"), "w") as f:
+        json.dump(per_task_calls, f, indent=2)
     print(f"\nEvaluation summary written cleanly to {runner.output_dir}/production_runner_summary.json")
+    print(f"Per-task call counts written to {runner.output_dir}/production_call_counts.json")
     print(f"\nTotal judge calls: {request_count}")
 
 if __name__ == "__main__":

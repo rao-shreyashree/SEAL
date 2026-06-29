@@ -114,7 +114,7 @@ def trace_to_str(raw_trace: list[dict]) -> str:
 
 # judge 
 class SEALJudge:
-    def _init_(
+    def __init__(
         self,
         model_name: str = "gemini-2.5-flash",
         api_key: Optional[str] = None,
@@ -167,7 +167,7 @@ class SEALJudge:
                     continue  # retry immediately on the new key
                 if attempt < self.max_retries - 1:
                     print(
-                        f"\n[RETRY:{log_label}] {type(e)._name_} "
+                        f"\n[RETRY:{log_label}] {type(e).__name__} "
                         f"({getattr(e, 'status_code', 'Error')}). "
                         f"Retrying in {backoff}s... (Attempt {attempt + 1}/{self.max_retries})"
                     )
