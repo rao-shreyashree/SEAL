@@ -1,18 +1,3 @@
-"""
-agent/agent.py — SEALAgent with real environment stepping and intrinsic failure detection.
-
-Key design contract (do NOT simplify away):
-  _detect_failure_type() is INDEPENDENT from env.data["forced_outcome"].
-  It reads only trajectory observations and loop alerts.
-  This is what Fig 2 measures: does the agent's own diagnosis match the oracle?
-  If you make detected_failure_type == forced_outcome by construction, Fig 2 is broken.
-
-Priority order for overlapping signals (agreed with team):
-  GOAL_DRIFT > EXECUTION_ERROR > CONTEXT_LOSS > UNKNOWN
-  Rationale: target-substitution is a stronger, more specific signal than stagnation.
-  A drifted trajectory can also look stagnant, so GOAL_DRIFT must win the tie.
-"""
-
 import os
 import re
 from huggingface_hub import InferenceClient
@@ -39,13 +24,18 @@ def compute_plan_coherence(plan: str) -> float:
         1 for step in numbered
         if any(verb in step.lower() for verb in VALID_ACTION_VERBS)
     )
-    return round(valid_steps / len(numbered), 2)
+    coherence = valid_steps / len(numbered)
+    return round(coherence, 2)
 
 
 class SEALAgent:
 
     def __init__(self, hf_token=None):
         token = hf_token or os.environ.get("HF_TOKEN")
+        # Use model= not api_key= so InferenceClient routes to the right endpoint.
+        # Mistral-Nemo-Instruct-2407 is NOT served as a chat endpoint on HF inference API
+        # (causes "not a chat model" error). Mistral-7B-Instruct-v0.3 IS supported
+        # via text_generation, which is what plan() uses below.
         self.client = InferenceClient(
             model="mistralai/Mistral-7B-Instruct-v0.3",
             token=token,
@@ -54,7 +44,18 @@ class SEALAgent:
         self.consecutive_failures = 0
 
     def plan(self, task: str, rubric: str) -> str:
-        """Calls Mistral 7B to generate a structured CoT action plan."""
+        """Calls Mistral-7B-Instruct-v0.3 via HF text_generation to produce a structured action plan.
+
+        Uses text_generation (not chat.completions) because Mistral-7B-Instruct-v0.3
+        is a text-generation model on HF inference API. Mistral-Nemo-Instruct-2407
+        was incorrectly used with chat.completions which caused "not a chat model" errors
+        and triggered FALLBACK on every single task, breaking plan_coherence scores.
+
+        To rotate API keys: set HF_TOKEN_1 / HF_TOKEN_2 / HF_TOKEN_3 in your env,
+        then pass the active key as hf_token= when constructing SEALAgent, e.g.:
+            agent = SEALAgent(hf_token=os.environ["HF_TOKEN_2"])
+        The runner picks up HF_TOKEN by default if no key is passed.
+        """
         prompt = (
             f"[INST] You are a household task planning agent.\n"
             f"Rubric: {rubric}\n"
@@ -75,16 +76,18 @@ class SEALAgent:
         except Exception as e:
             return (
                 f"1. Go to container\n2. Open container\n3. Place item\n"
-                f"[FALLBACK — Mistral unavailable: {e}]"
+                f"[FALLBACK - Mistral unavailable: {e}]"
             )
 
     def _detect_failure_type(self, success: bool, trajectory: list) -> str:
-        """
-        Intrinsic failure diagnostic engine — reads ONLY trajectory data.
-        Must NOT read env.data["forced_outcome"]. That is the oracle (ground truth).
-        This function is what Fig 2 compares against the oracle.
+        """Intrinsic failure diagnostic engine (independent from environmental oracle).
 
-        Priority: GOAL_DRIFT > EXECUTION_ERROR > CONTEXT_LOSS > UNKNOWN
+        # critical section
+        # do not change this priority order without discussing with the team
+        # Decided priority when signals overlap: GOAL_DRIFT > EXECUTION_ERROR > CONTEXT_LOSS
+        # GOAL_DRIFT and EXECUTION_ERROR are both explicit keyword signals
+        # and outrank CONTEXT_LOSS's inferred stagnation-rate heuristic
+        # since a drifted or blocked trajectory can ALSO look stagnant
         """
         if success:
             return "NONE"
@@ -93,9 +96,8 @@ class SEALAgent:
         if total == 0:
             return "EXECUTION_ERROR"
 
-        # GOAL_DRIFT: target-substitution is the strongest, most specific signal.
-        # A drifted trajectory can also look stagnant (agent retries around wrong target),
-        # so GOAL_DRIFT must be checked first to win any overlap.
+        # 1. GOAL_DRIFT: target-substitution is a stronger, more specific signal
+        # than stagnation rate. so we check it first
         wrong_object_steps = [
             s for s in trajectory
             if "wrong item" in s["observation_received"].lower()
@@ -104,25 +106,29 @@ class SEALAgent:
         if wrong_object_steps:
             return "GOAL_DRIFT"
 
-        # EXECUTION_ERROR: environmental dependency block via keyword parsing
-        # Checked before CONTEXT_LOSS because a jammed env can also produce repeated obs.
+        # 2. EXECUTION_ERROR: explicit blocked-keyword signal, checked BEFORE
+        # the stagnation-rate check so a trajectory that is both stagnant and
+        # contains a blocked-keyword observation returns EXECUTION_ERROR
         blocked_keywords = ["jammed", "mechanical failure", "cannot open", "blocked"]
         for step in trajectory:
             obs = step["observation_received"].lower()
             if any(kw in obs for kw in blocked_keywords):
                 return "EXECUTION_ERROR"
 
-        # CONTEXT_LOSS: agent trapped in non-mutating state loop
-        # internal_loop_alert is None or a warning string — use truthiness check
-        stagnant = sum(1 for s in trajectory if s["internal_loop_alert"] is not None)
+        # 3. CONTEXT_LOSS: inferred rate-based heuristic, checked last
+        # internal_loop_alert is now None or a string warning
+        stagnant = sum(
+            1 for s in trajectory if s["internal_loop_alert"] is not None
+        )
         stagnation_rate = stagnant / total
+
         if stagnation_rate >= 0.6:
             return "CONTEXT_LOSS"
 
         return "UNKNOWN"
 
     def execute(self, plan: str, env, rubric: str) -> dict:
-        """Executes the step trajectory against the real environment while monitoring for loop anomalies."""
+        """Executes the step trajectory while monitoring for loop anomalies."""
         self.steps_history = []
         self.consecutive_failures = 0
         goal, current_obs = env.reset()
@@ -142,7 +148,7 @@ class SEALAgent:
             item = [g for g in item_match.groups() if g is not None][0]
 
         # Resolve GOAL_DRIFT wrong-item token from scenario config if available
-        # Falls back to "key ring" only as last resort
+        # Falls back to hardcoded "key ring" only as last resort
         drift_item = getattr(env, "drift_item", None) or env.data.get("drift_item", "key ring")
 
         while not done and step_count < max_steps:
@@ -150,7 +156,7 @@ class SEALAgent:
 
             forced_outcome = env.data["forced_outcome"]
 
-            # Action selection — real planning logic, NOT just mirroring forced_outcome
+            # Strategy selection — ordered by priority
             if forced_outcome == "CONTEXT_LOSS" and "META-REFLECTION" not in rubric:
                 action = "look"
             elif self.consecutive_failures >= 2:
@@ -174,8 +180,8 @@ class SEALAgent:
 
             next_obs, success = env.step(action, rubric)
 
-            # internal_loop_alert must be Python None (not the string "None")
-            # so teammates can safely use truthiness checks: `if s["internal_loop_alert"]`
+            # internal_loop_alert is None (Python None) or a warning string
+            # IMPORTANT: use None not the string "None"
             internal_warning = None
             if next_obs == current_obs:
                 self.consecutive_failures += 1
@@ -187,7 +193,7 @@ class SEALAgent:
                 "step": step_count,
                 "action_executed": action,
                 "observation_received": next_obs,
-                "internal_loop_alert": internal_warning,  # None or string — NOT the string "None"
+                "internal_loop_alert": internal_warning,
             })
 
             current_obs = next_obs
@@ -208,14 +214,23 @@ class SEALAgent:
         confidence_score = confidence_map.get(detected_failure_type, 0.50)
         plan_coherence = compute_plan_coherence(plan)
 
+        # Behavioral drift recovery: 
+        # did the agent initially drift to the wrong item, then later place the correct item in the same trajectory?
+        drifted_at_some_step = any(
+            "wrong item" in s["observation_received"].lower()
+            or "task drift" in s["observation_received"].lower()
+            for s in self.steps_history
+        )
+        drift_recovered = bool(drifted_at_some_step and done)
+
         return {
             "task_goal": goal,
             "macro_plan": plan,
-            "plan_coherence": plan_coherence,
+            "plan_coherence": plan_coherence,       # NEW: metric per architecture diagram
             "total_steps": step_count,
             "final_outcome": final_outcome,
             "detected_failure_type": detected_failure_type,
             "agent_intrinsic_confidence": confidence_score,
             "trajectory": self.steps_history,
-            "drift_recovered": False,
+            "drift_recovered": drift_recovered,
         }
