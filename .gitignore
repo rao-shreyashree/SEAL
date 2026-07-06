@@ -8,3 +8,5 @@ fig1_success_by_iteration.png
 smoke_test_small.py
 seallogs_smoke/
 sanity_check.py
+# this should NOT pushed
+seal/keys.json
