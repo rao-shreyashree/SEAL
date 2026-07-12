@@ -32,34 +32,47 @@ class SEALAgent:
 
     def __init__(self, hf_token=None):
         token = hf_token or os.environ.get("HF_TOKEN")
+        # Use model= not api_key= so InferenceClient routes to the right endpoint.
+        # Mistral-Nemo-Instruct-2407 is NOT served as a chat endpoint on HF inference API
+        # (causes "not a chat model" error). Mistral-7B-Instruct-v0.3 IS supported
+        # via text_generation, which is what plan() uses below.
         self.client = InferenceClient(
-            api_key=token,
+            model="mistralai/Mistral-7B-Instruct-v0.3",
+            token=token,
         )
         self.steps_history = []
         self.consecutive_failures = 0
 
     def plan(self, task: str, rubric: str) -> str:
-        """Calls Mistral-Nemo chat model to generate a structured step-by-step action plan."""
-        system_prompt = "You are a household task planning agent."
-        user_message = (
+        """Calls Mistral-7B-Instruct-v0.3 via HF text_generation to produce a structured action plan.
+
+        Uses text_generation (not chat.completions) because Mistral-7B-Instruct-v0.3
+        is a text-generation model on HF inference API. Mistral-Nemo-Instruct-2407
+        was incorrectly used with chat.completions which caused "not a chat model" errors
+        and triggered FALLBACK on every single task, breaking plan_coherence scores.
+
+        To rotate API keys: set HF_TOKEN_1 / HF_TOKEN_2 / HF_TOKEN_3 in your env,
+        then pass the active key as hf_token= when constructing SEALAgent, e.g.:
+            agent = SEALAgent(hf_token=os.environ["HF_TOKEN_2"])
+        The runner picks up HF_TOKEN by default if no key is passed.
+        """
+        prompt = (
+            f"[INST] You are a household task planning agent.\n"
             f"Rubric: {rubric}\n"
             f"Task: {task}\n\n"
             f"Produce a numbered step-by-step action plan to complete this task. "
             f"Each step must be a single executable action such as "
             f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
-            f"Output ONLY the numbered plan, no preamble."
+            f"Output ONLY the numbered plan, no preamble. [/INST]"
         )
         try:
-            completion = self.client.chat.completions.create(
-                model="mistralai/Mistral-Nemo-Instruct-2407",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
+            response = self.client.text_generation(
+                prompt,
+                max_new_tokens=256,
                 temperature=0.3,
-                max_tokens=256,
+                do_sample=True,
             )
-            return completion.choices[0].message.content.strip()
+            return response.strip()
         except Exception as e:
             return (
                 f"1. Go to container\n2. Open container\n3. Place item\n"
