@@ -32,51 +32,50 @@ class SEALAgent:
 
     def __init__(self, hf_token=None):
         token = hf_token or os.environ.get("HF_TOKEN")
-        # Use model= not api_key= so InferenceClient routes to the right endpoint.
-        # Mistral-Nemo-Instruct-2407 is NOT served as a chat endpoint on HF inference API
-        # (causes "not a chat model" error). Mistral-7B-Instruct-v0.3 IS supported
-        # via text_generation, which is what plan() uses below.
+        # provider="auto" routes through HF Inference Providers (nebius, sambanova, etc.)
+        # instead of hf-inference, which as of mid-2025 only serves CPU tasks like
+        # embeddings/classification and no longer serves LLMs.
+        # This is what broke Mistral-7B text_generation — it was routing through hf-inference.
         self.client = InferenceClient(
-            model="mistralai/Mistral-7B-Instruct-v0.3",
-            token=token,
+            provider="auto",
+            api_key=token,
         )
         self.steps_history = []
         self.consecutive_failures = 0
 
     def plan(self, task: str, rubric: str) -> str:
-        """Calls Mistral-7B-Instruct-v0.3 via HF text_generation to produce a structured action plan.
+        """Calls Qwen2.5-7B-Instruct via HF Inference Providers to generate a structured action plan.
 
-        Uses text_generation (not chat.completions) because Mistral-7B-Instruct-v0.3
-        is a text-generation model on HF inference API. Mistral-Nemo-Instruct-2407
-        was incorrectly used with chat.completions which caused "not a chat model" errors
-        and triggered FALLBACK on every single task, breaking plan_coherence scores.
-
-        To rotate API keys: set HF_TOKEN_1 / HF_TOKEN_2 / HF_TOKEN_3 in your env,
-        then pass the active key as hf_token= when constructing SEALAgent, e.g.:
-            agent = SEALAgent(hf_token=os.environ["HF_TOKEN_2"])
-        The runner picks up HF_TOKEN by default if no key is passed.
+        Model history (for reference):
+          Mistral-Nemo-Instruct-2407  — chat.completions, "not a chat model" error, FALLBACK every task
+          Mistral-7B-Instruct-v0.3    — text_generation, routed through hf-inference (CPU only), broken
+          HuggingFaceH4/zephyr-7b-beta — chat.completions workaround, unstable
+          Qwen/Qwen2.5-7B-Instruct    — chat.completions + provider=auto, stable on free HF token ✓
         """
-        prompt = (
-            f"[INST] You are a household task planning agent.\n"
+        system_prompt = "You are a household task planning agent."
+        user_message = (
             f"Rubric: {rubric}\n"
             f"Task: {task}\n\n"
             f"Produce a numbered step-by-step action plan to complete this task. "
             f"Each step must be a single executable action such as "
             f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
-            f"Output ONLY the numbered plan, no preamble. [/INST]"
+            f"Output ONLY the numbered plan, no preamble."
         )
         try:
-            response = self.client.text_generation(
-                prompt,
-                max_new_tokens=256,
+            completion = self.client.chat.completions.create(
+                model="Qwen/Qwen2.5-7B-Instruct",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
                 temperature=0.3,
-                do_sample=True,
+                max_tokens=256,
             )
-            return response.strip()
+            return completion.choices[0].message.content.strip()
         except Exception as e:
             return (
                 f"1. Go to container\n2. Open container\n3. Place item\n"
-                f"[FALLBACK - Mistral unavailable: {e}]"
+                f"[FALLBACK - Qwen unavailable: {e}]"
             )
 
     def _detect_failure_type(self, success: bool, trajectory: list) -> str:
