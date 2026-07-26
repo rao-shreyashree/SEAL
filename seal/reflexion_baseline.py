@@ -1,3 +1,31 @@
+"""
+
+
+No judge here. Agent attempts the task, reflects on its own trajectory in
+plain language, and retries using that reflection as memory. Keeping the
+output schema-identical to what Tanisha's SEALRunner produces (same
+TaskResult, NO new fields) so I can run my metric functions and figures
+across all 3 conditions without separate code paths.
+
+How I'm reusing existing TaskResult fields here (since there's no judge,
+the judge-only fields would otherwise just sit empty):
+  - judge_score / judge_failure_type -> always None. No judge in this condition.
+  - judge_explanation -> repurposing this to hold the agent's OWN self-reflection text per iteration. Not a judge writing here, it's the agent talking to itself.
+  - rubric_version / rubric_hash -> DO NOT TOUCH / let these change across iterations. 
+        No rubric evolution happens in this condition by design - that's the whole point of the ablation. 
+        Relying on this staying flat to show ~0 drift here vs SEAL's nonzero drift. 
+  - rubric_drift_score -> always 0.0, nothing evolves so there's nothing to measure.
+
+IMPORTANT
+do NOT route any TaskResult from this file through SEALJudge.evaluate(). 
+It'll overwrite judge_explanation with real judge output and quietly break the repurposing above. 
+These rows are baseline-only. 
+
+
+Execution reuses Tanisha's SEALAgent.execute() as-is - same env stepping, same action policy, untouched. 
+Only the adaptation signal changes (verbal reflection vs judge + rubric evolution), which is what keeps this a fair ablation instead of comparing two different agents.
+"""
+
 from agent.agent import SEALAgent
 from seal.task_result import TaskResult, make_rubric_hash
 
