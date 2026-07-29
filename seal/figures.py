@@ -178,6 +178,42 @@ def fig5_ablation_final_success_rate(results_by_condition: dict, save_path="fig5
     return save_path
 
 
+def fig6_max_iterations_ablation(results_by_condition: dict, save_path="fig6_max_iterations_ablation.png"):
+    """Final success rate if max_iterations had been capped at 1, 2, or 3.
+    Sliced from existing TaskResult dat
+    """
+    caps = [1, 2, 3]
+    conditions = [c for c in results_by_condition if c != "Zero-Shot"]  # always exactly 1 iter, capping is meaningless
+    width = 0.8 / max(len(conditions), 1)
+    x = range(len(caps))
+
+    plt.figure(figsize=(7, 5))
+    for idx, condition in enumerate(conditions):
+        by_task = defaultdict(list)
+        for r in results_by_condition[condition]:
+            by_task[r.task_id].append(r)
+
+        rates = []
+        for cap in caps:
+            successes = 0
+            for task_id, rs in by_task.items():
+                capped = [r for r in rs if r.iteration <= cap]
+                if any(r.success for r in capped):
+                    successes += 1
+            rates.append(successes / len(by_task) if by_task else 0.0)
+
+        offsets = [xi + idx * width for xi in x]
+        plt.bar(offsets, rates, width=width, label=condition)
+
+    plt.xticks([xi + width * (len(conditions) - 1) / 2 for xi in x], [f"iter<={c}" for c in caps])
+    plt.ylabel("Success Rate")
+    plt.ylim(0, 1.05)
+    plt.title("Max Iterations Ablation: Success Rate by Iteration Cap")
+    plt.legend()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    return save_path
+
 def generate_all_figures(results_by_condition: dict) -> dict:
     """Generates all 5 figures. Returns dict of fig_name -> save_path."""
     return {
@@ -186,4 +222,5 @@ def generate_all_figures(results_by_condition: dict) -> dict:
         "fig3": fig3_strategy_selection_frequency(results_by_condition, condition="SEAL"),
         "fig4": fig4_rubric_drift_curve(results_by_condition),
         "fig5": fig5_ablation_final_success_rate(results_by_condition),
+        "fig6": fig6_max_iterations_ablation(results_by_condition)
     }
