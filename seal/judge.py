@@ -32,10 +32,10 @@ from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
+import re
 
-from google import genai
-from google.genai import types
-from google.genai.errors import ClientError, ServerError
+from groq import Groq
+from groq import APIError, APIStatusError, RateLimitError
 
 
 # failure taxonomy 
@@ -112,33 +112,44 @@ def trace_to_str(raw_trace: list[dict]) -> str:
 
     return "\n".join(lines)
 
+def _extract_json(raw: str) -> dict:
+    """Groq's llama-3.3-70b-versatile often prepends reasoning prose before
+    the JSON block (unlike gemini, which returned near-raw JSON). 
+    Pull the JSON object out from wherever it sits in the response instead of
+    assuming the whole string is JSON."""
+    clean = raw.strip()
+
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", clean, re.DOTALL)
+    if fence_match:
+        candidate = fence_match.group(1)
+    else:
+        # fallback: grab from the first '{' to the last '}' in the response
+        start = clean.find("{")
+        end = clean.rfind("}")
+        if start == -1 or end == -1 or end < start:
+            raise ValueError(f"[evaluate] No JSON object found in Groq response: {raw!r}")
+        candidate = clean[start:end + 1]
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"[evaluate] Failed to parse extracted JSON: {candidate!r}") from e
+
 # judge 
 class SEALJudge:
     def __init__(
         self,
-        model_name: str = "gemini-2.5-flash",
+        model_name: str = "llama-3.3-70b-versatile",
         api_key: Optional[str] = None,
-        api_keys: Optional[list[str]] = None,
         max_retries: int = 5,
-        backoff_time: float = 12.0,
+        backoff_time: float = 2.5,  # Groq free tier: 30 RPM -> 2s+ between calls
+        rotator=None,  # optional seal.runner.KeyRotator - enables force-rotate on 429s
     ):
-        # api_keys: list for rotation on quota exhaustion
-        # Falls back to single api_key/GEMINI_API_KEY if not provided, for backward compatibility
-        self._keys = api_keys or [api_key or os.environ.get("GEMINI_API_KEY")]
-        self._key_index = 0
-        self.client = genai.Client(api_key=self._keys[self._key_index])
+        self.client = Groq(api_key=api_key or os.environ.get("GROQ_API_KEY"))
         self.model_name = model_name
         self.max_retries = max_retries
         self.backoff_time = backoff_time
-
-    def _rotate_key(self) -> bool:
-        """Switch to the next available API key. Returns False if none left."""
-        if self._key_index + 1 >= len(self._keys):
-            return False
-        self._key_index += 1
-        self.client = genai.Client(api_key=self._keys[self._key_index])
-        print(f"[KEY ROTATION] Switched to key index {self._key_index}.")
-        return True
+        self.rotator = rotator
 
     def _call_with_retry(self, prompt: str, temperature: float, log_label: str) -> str:
         """Shared retry/backoff wrapper for both evaluate() and evolve_rubric().
@@ -152,19 +163,20 @@ class SEALJudge:
         response = None
         for attempt in range(self.max_retries):
             try:
-                response = self.client.models.generate_content(
+                response = self.client.chat.completions.create(
                     model=self.model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=temperature,
-                    ),
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
                 )
                 break
-            except (ClientError, ServerError) as e:
-                is_quota_error = getattr(e, "status_code", None) == 429
-                if is_quota_error and self._rotate_key():
-                    continue  # retry immediately on the new key
+            except (APIError, APIStatusError, RateLimitError) as e:
+                is_quota_error = getattr(e, "status_code", None) == 429 or "rate_limit" in str(e).lower()
+                if is_quota_error and self.rotator:
+                    # real quota/token limit hit - rotate key immediately instead of
+                    # sleeping and retrying on the same exhausted key
+                    self.rotator.force_rotate(reason=f"[{log_label}] {type(e).__name__}: {e}")
+                    self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))  # rebuild client with new key
+                    continue
                 if attempt < self.max_retries - 1:
                     print(
                         f"\n[RETRY:{log_label}] {type(e).__name__} "
@@ -172,11 +184,10 @@ class SEALJudge:
                         f"Retrying in {backoff}s... (Attempt {attempt + 1}/{self.max_retries})"
                     )
                     time.sleep(backoff)
-                    backoff *= 2
                 else:
                     print(f"\n[FAILED:{log_label}] Exhausted all retries.")
                     raise
-        return response.text.strip()
+        return response.choices[0].message.content.strip()
 
     def evaluate(self, trace: str, rubric: dict) -> EvalResult:
         failure_values = [f.value for f in FailureType]
@@ -209,7 +220,7 @@ Rules:
 - dimension_scores must have one entry per rubric criterion
 """
         raw = self._call_with_retry(prompt, temperature=0.1, log_label="evaluate")
-        data = json.loads(raw)
+        data = _extract_json(raw)
 
         ft_str = data.get("failure_type")
         ft = FailureType(ft_str) if ft_str and ft_str in failure_values else None
@@ -275,7 +286,7 @@ Return a JSON object following this exact schema structure:
 }}
 """
         raw = self._call_with_retry(prompt, temperature=0.2, log_label="evolve_rubric")
-        new_rubric = json.loads(raw)
+        new_rubric = _extract_json(raw)
 
         total_w = sum(v.get("weight", 0.0) for v in new_rubric.values())
         if abs(total_w - 1.0) > 0.02:
@@ -299,13 +310,13 @@ class JudgeFixed(SEALJudge):
 
     # critical section
     # do not change without discussing with the team
-    # This subclasses SEALJudge (Gemini) on purpose, NOT judge_mistral.SEALJudge (Mistral/HF)
+    # This subclasses SEALJudge (Groq) on purpose, NOT judge_mistral.SEALJudge (Mistral/HF)
     # The ablation in Fig 5 is only valid if SEAL and No-Rubric-Evolution differ in exactly one variable: 
     # whether evolve_rubric() actually mutates the rubric
     # Using a different judge model here would confound "rubric evolution on/off" with
     # "different LLM backend" and invalidate the ablation bar chart
 
-    evaluate() is inherited unchanged (still Gemini)
+    evaluate() is inherited unchanged (still Groq)
     evolve_rubric() is overridden to be a true no-op: returns the input rubric, similarity 1.0
     (identical) and was_updated=False
     so rubric_hash and rubric_drift_score stay flat across iterations
