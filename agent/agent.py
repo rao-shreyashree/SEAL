@@ -1,6 +1,7 @@
 import os
 import re
 from huggingface_hub import InferenceClient
+import time
 
 # Valid ALFWorld action verbs for plan coherence scoring
 VALID_ACTION_VERBS = ["go to", "open", "put", "place", "examine", "pick up", "take", "close"]
@@ -31,53 +32,67 @@ def compute_plan_coherence(plan: str) -> float:
 class SEALAgent:
 
     def __init__(self, hf_token=None):
-        token = hf_token or os.environ.get("HF_TOKEN")
-        # Use model= not api_key= so InferenceClient routes to the right endpoint.
-        # Mistral-Nemo-Instruct-2407 is NOT served as a chat endpoint on HF inference API
-        # (causes "not a chat model" error). Mistral-7B-Instruct-v0.3 IS supported
-        # via text_generation, which is what plan() uses below.
-        self.client = InferenceClient(
-            model="mistralai/Mistral-7B-Instruct-v0.3",
-            token=token,
-        )
+        # NOTE: kept param name hf_token for backward compat with existing call
+        # sites (run_baselines.py etc. pass SEALAgent(hf_token=...) in some
+        # places for the HF-based reflexion/zeroshot/mistral runs) - but the
+        # planner itself now runs on Groq, not HF, since Qwen2.5-7B via HF
+        # Inference Providers (provider="auto") kept 402ing regardless of
+        # account/token, even brand-new ones. See agenda flagged w Tanisha.
+        from groq import Groq
+        self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
         self.steps_history = []
         self.consecutive_failures = 0
 
-    def plan(self, task: str, rubric: str) -> str:
-        """Calls Mistral-7B-Instruct-v0.3 via HF text_generation to produce a structured action plan.
+    def plan(self, task: str, rubric: str, max_retries: int = 3, retry_delay: float = 5.0) -> str:
+        """Calls Qwen2.5-7B-Instruct via HF Inference Providers to generate a structured action plan.
 
-        Uses text_generation (not chat.completions) because Mistral-7B-Instruct-v0.3
-        is a text-generation model on HF inference API. Mistral-Nemo-Instruct-2407
-        was incorrectly used with chat.completions which caused "not a chat model" errors
-        and triggered FALLBACK on every single task, breaking plan_coherence scores.
-
-        To rotate API keys: set HF_TOKEN_1 / HF_TOKEN_2 / HF_TOKEN_3 in your env,
-        then pass the active key as hf_token= when constructing SEALAgent, e.g.:
-            agent = SEALAgent(hf_token=os.environ["HF_TOKEN_2"])
-        The runner picks up HF_TOKEN by default if no key is passed.
+        Model history (for reference):
+          Mistral-Nemo-Instruct-2407  — chat.completions, "not a chat model" error, FALLBACK every task
+          Mistral-7B-Instruct-v0.3    — text_generation, routed through hf-inference (CPU only), broken
+          HuggingFaceH4/zephyr-7b-beta — chat.completions workaround, unstable
+          Qwen/Qwen2.5-7B-Instruct    — chat.completions + provider=auto, stable on free HF token ✓
+        
+        Retries transient failures (network blips, momentary 402/429s) before
+        falling back to the hardcoded plan - a single flaky call used to
+        permanently corrupt strategy_used/plan_coherence for that iteration.
         """
-        prompt = (
-            f"[INST] You are a household task planning agent.\n"
+        system_prompt = "You are a household task planning agent."
+        user_message = (
             f"Rubric: {rubric}\n"
             f"Task: {task}\n\n"
             f"Produce a numbered step-by-step action plan to complete this task. "
             f"Each step must be a single executable action such as "
             f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
-            f"Output ONLY the numbered plan, no preamble. [/INST]"
+            f"Output ONLY the numbered plan, no preamble."
         )
-        try:
-            response = self.client.text_generation(
-                prompt,
-                max_new_tokens=256,
-                temperature=0.3,
-                do_sample=True,
-            )
-            return response.strip()
-        except Exception as e:
-            return (
-                f"1. Go to container\n2. Open container\n3. Place item\n"
-                f"[FALLBACK - Mistral unavailable: {e}]"
-            )
+        from groq import Groq  # local import - same pattern as __init__, avoids top-level dependency churn
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                completion = self.client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    temperature=0.3,
+                    max_tokens=256,
+                )
+                return completion.choices[0].message.content.strip()
+            except Exception as e:
+                last_error = e
+                is_auth_or_quota = "401" in str(e) or "429" in str(e) or "invalid_api_key" in str(e).lower()
+                if is_auth_or_quota:
+                    self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+                if attempt < max_retries - 1:
+                    print(f"[RETRY:plan] {type(e).__name__}: {e} — attempt {attempt + 1}/{max_retries}. Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+
+        return (
+            f"1. Go to container\n2. Open container\n3. Place item\n"
+            f"[FALLBACK - Groq planner unavailable: {last_error}]"
+        )
 
     def _detect_failure_type(self, success: bool, trajectory: list) -> str:
         """Intrinsic failure diagnostic engine (independent from environmental oracle).
