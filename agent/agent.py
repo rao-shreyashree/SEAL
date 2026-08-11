@@ -6,6 +6,30 @@ from huggingface_hub import InferenceClient
 VALID_ACTION_VERBS = ["go to", "open", "put", "place", "examine", "pick up", "take", "close"]
 
 
+def _read_rubric_hints(rubric) -> list:
+    """Extract _seal_hints from the rubric if the judge evolved it.
+
+    rubric can be a dict (from runner.py, which passes active_rubric directly
+    to execute()) or a JSON string (legacy path). Both are handled.
+
+    Returns a list of hint strings e.g. ["CONTEXT_LOSS_ADDRESSED", "GOAL_DRIFT_ADDRESSED"].
+    Returns [] if no hints present (seed rubric, JudgeFixed, or evolution produced no diff).
+
+    This is the ONLY place agent.py reads rubric structure — it never inspects
+    individual criteria keys, so Anagha can rename rubric fields freely without
+    breaking agent behavior.
+    """
+    if isinstance(rubric, str):
+        import json as _json
+        try:
+            rubric = _json.loads(rubric)
+        except Exception:
+            return []
+    if not isinstance(rubric, dict):
+        return []
+    return rubric.get("_seal_hints", [])
+
+
 def compute_plan_coherence(plan: str) -> float:
     """
     Parses Mistral's plan output and returns a 0.0–1.0 coherence score.
@@ -155,14 +179,26 @@ class SEALAgent:
 
             forced_outcome = env.data["forced_outcome"]
 
-            # Strategy selection — ordered by priority
-            if forced_outcome == "CONTEXT_LOSS" and "META-REFLECTION" not in rubric:
+            # Strategy selection — ordered by priority.
+            # Rubric hints from judge.evolve_rubric() tell us which failure type
+            # the judge addressed in its latest rewrite. We check hints (substance)
+            # not literal marker strings (option-a from design discussion).
+            # "CONTEXT_LOSS_ADDRESSED" in hints means the judge added rules targeting
+            # loop/stagnation — agent should attempt escape actions, not just "look".
+            # "GOAL_DRIFT_ADDRESSED" means the judge flagged wrong-item substitution —
+            # agent should stay on the correct item instead of drifting.
+            hints = _read_rubric_hints(rubric)
+            context_loss_rubric_updated = "CONTEXT_LOSS_ADDRESSED" in hints
+            goal_drift_rubric_updated   = "GOAL_DRIFT_ADDRESSED" in hints
+
+            if forced_outcome == "CONTEXT_LOSS" and not context_loss_rubric_updated:
+                # Judge hasn't addressed context loss yet — agent stays stuck (stagnates)
                 action = "look"
             elif self.consecutive_failures >= 2:
                 # Recovery: skip ahead to placement attempt
                 action = f"put {item} in {target} 1"
-            elif forced_outcome == "GOAL_DRIFT" and step_count >= 3 and "ITERATIVE-PROMPTING" not in rubric:
-                # Semantic drift simulation: inject wrong token from scenario config
+            elif forced_outcome == "GOAL_DRIFT" and step_count >= 3 and not goal_drift_rubric_updated:
+                # Judge hasn't addressed goal drift yet — agent drifts to wrong item
                 action = f"put {drift_item} in {target} 1"
             elif sequence_state == 0:
                 action = f"go to {target} 1"

@@ -32,10 +32,10 @@ from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
+import re
 
-from google import genai
-from google.genai import types
-from google.genai.errors import ClientError, ServerError
+from groq import Groq
+from groq import APIError, APIStatusError, RateLimitError
 
 
 # failure taxonomy 
@@ -91,35 +91,65 @@ DEFAULT_RUBRIC = {
 
 def trace_to_str(raw_trace: list[dict]) -> str:
     """Adapter: TaskResult.raw_trace (List[dict]) -> the string evaluate() expects.
-
-    Confirmed with Tanisha: each step dict has step (int), action_executed
-    (str), observation_received (str), and internal_loop_alert (str | None).
-    internal_loop_alert is intentionally dropped here -- noisy, degrades
-    judge context window, not needed for evaluation
+    Tolerant of key naming: checks action_executed/observation_received first,
+    falls back to action/observation if present, and falls back to the loop
+    index if 'step' is missing. 
+    internal_loop_alert is intentionally dropped here -- noisy, degrades judge context window, not needed for evaluation
 
     Format matches the notebook's original hand-built "Step N / Action / Obs"
-    style the judge prompt was tuned against (see SESSION.md), replacing the
-    earlier generic json.dumps() placeholder
+    style the judge prompt was tuned against, replacing the earlier generic json.dumps() placeholder
     """
-    return "\n".join([
-        f"Step {s['step']}: Action -> '{s['action_executed']}' | Obs -> {s['observation_received']}"
-        for s in raw_trace
-    ])
+    lines = []
 
+    for i, s in enumerate(raw_trace, start=1):
+        step = s.get("step", i)
+        action = s.get("action_executed", s.get("action", ""))
+        obs = s.get("observation_received", s.get("observation", ""))
+
+        lines.append(
+            f"Step {step}: Action -> '{action}' | Obs -> {obs}"
+        )
+
+    return "\n".join(lines)
+
+def _extract_json(raw: str) -> dict:
+    """Groq's llama-3.3-70b-versatile often prepends reasoning prose before
+    the JSON block (unlike gemini, which returned near-raw JSON). 
+    Pull the JSON object out from wherever it sits in the response instead of
+    assuming the whole string is JSON."""
+    clean = raw.strip()
+
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", clean, re.DOTALL)
+    if fence_match:
+        candidate = fence_match.group(1)
+    else:
+        # fallback: grab from the first '{' to the last '}' in the response
+        start = clean.find("{")
+        end = clean.rfind("}")
+        if start == -1 or end == -1 or end < start:
+            raise ValueError(f"[evaluate] No JSON object found in Groq response: {raw!r}")
+        candidate = clean[start:end + 1]
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"[evaluate] Failed to parse extracted JSON: {candidate!r}") from e
 
 # judge 
 class SEALJudge:
     def __init__(
         self,
-        model_name: str = "gemini-2.5-flash",
+        model_name: str = "llama-3.3-70b-versatile",
         api_key: Optional[str] = None,
         max_retries: int = 5,
-        backoff_time: float = 12.0,
+        backoff_time: float = 2.5,  # Groq free tier: 30 RPM -> 2s+ between calls
+        rotator=None,  # optional seal.runner.KeyRotator - enables force-rotate on 429s
     ):
-        self.client = genai.Client(api_key=api_key or os.environ.get("GEMINI_API_KEY"))
+        self.client = Groq(api_key=api_key or os.environ.get("GROQ_API_KEY"))
         self.model_name = model_name
         self.max_retries = max_retries
         self.backoff_time = backoff_time
+        self.rotator = rotator
 
     def _call_with_retry(self, prompt: str, temperature: float, log_label: str) -> str:
         """Shared retry/backoff wrapper for both evaluate() and evolve_rubric().
@@ -133,16 +163,20 @@ class SEALJudge:
         response = None
         for attempt in range(self.max_retries):
             try:
-                response = self.client.models.generate_content(
+                response = self.client.chat.completions.create(
                     model=self.model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=temperature,
-                    ),
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
                 )
                 break
-            except (ClientError, ServerError) as e:
+            except (APIError, APIStatusError, RateLimitError) as e:
+                is_quota_error = getattr(e, "status_code", None) == 429 or "rate_limit" in str(e).lower()
+                if is_quota_error and self.rotator:
+                    # real quota/token limit hit - rotate key immediately instead of
+                    # sleeping and retrying on the same exhausted key
+                    self.rotator.force_rotate(reason=f"[{log_label}] {type(e).__name__}: {e}")
+                    self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))  # rebuild client with new key
+                    continue
                 if attempt < self.max_retries - 1:
                     print(
                         f"\n[RETRY:{log_label}] {type(e).__name__} "
@@ -150,11 +184,10 @@ class SEALJudge:
                         f"Retrying in {backoff}s... (Attempt {attempt + 1}/{self.max_retries})"
                     )
                     time.sleep(backoff)
-                    backoff *= 2
                 else:
                     print(f"\n[FAILED:{log_label}] Exhausted all retries.")
                     raise
-        return response.text.strip()
+        return response.choices[0].message.content.strip()
 
     def evaluate(self, trace: str, rubric: dict) -> EvalResult:
         failure_values = [f.value for f in FailureType]
@@ -187,7 +220,7 @@ Rules:
 - dimension_scores must have one entry per rubric criterion
 """
         raw = self._call_with_retry(prompt, temperature=0.1, log_label="evaluate")
-        data = json.loads(raw)
+        data = _extract_json(raw)
 
         ft_str = data.get("failure_type")
         ft = FailureType(ft_str) if ft_str and ft_str in failure_values else None
@@ -253,7 +286,7 @@ Return a JSON object following this exact schema structure:
 }}
 """
         raw = self._call_with_retry(prompt, temperature=0.2, log_label="evolve_rubric")
-        new_rubric = json.loads(raw)
+        new_rubric = _extract_json(raw)
 
         total_w = sum(v.get("weight", 0.0) for v in new_rubric.values())
         if abs(total_w - 1.0) > 0.02:
@@ -269,6 +302,42 @@ Return a JSON object following this exact schema structure:
             )
             return rubric, similarity, False
 
+        # Inject structured behavioral hints derived from the rubric's actual content.
+        # The agent reads _seal_hints to change action-selection — NOT literal marker strings.
+        # This is option (a) from the design discussion: agent reacts to rubric substance.
+        # Hints are computed from what actually changed between old and new rubric text,
+        # so if context_retention rules didn't change, CONTEXT_LOSS hint won't fire.
+        #
+        # _seal_hints is stripped before logging (runner strips it from rubric_string_representation)
+        # so it never leaks into TaskResult.rubric_text or judge's own evaluate() prompt.
+        context_kw = ["loop", "repeat", "stagnation", "revisit", "context", "remember", "retain"]
+        drift_kw   = ["target", "substitut", "correct item", "wrong item", "drift", "goal object"]
+        exec_kw    = ["block", "jam", "cannot open", "locked", "obstacle", "stuck"]
+
+        def _rules_text(r: dict) -> str:
+            parts = []
+            for v in r.values():
+                if isinstance(v, dict):
+                    parts.extend(v.get("rules", []))
+                    parts.append(v.get("description", ""))
+            return " ".join(parts).lower()
+
+        new_txt = _rules_text(new_rubric)
+        old_txt = _rules_text(rubric)
+
+        # Hint fires only when the relevant keyword appears in the NEW rubric
+        # but was absent from the old one — guards against spurious signals
+        # on criteria that didn't actually change.
+        hints = []
+        if any(k in new_txt and k not in old_txt for k in context_kw):
+            hints.append("CONTEXT_LOSS_ADDRESSED")
+        if any(k in new_txt and k not in old_txt for k in drift_kw):
+            hints.append("GOAL_DRIFT_ADDRESSED")
+        if any(k in new_txt and k not in old_txt for k in exec_kw):
+            hints.append("EXECUTION_ERROR_ADDRESSED")
+
+        new_rubric["_seal_hints"] = hints  # list[str], may be [] if nothing meaningfully changed
+
         return new_rubric, similarity, True
 
 
@@ -277,13 +346,13 @@ class JudgeFixed(SEALJudge):
 
     # critical section
     # do not change without discussing with the team
-    # This subclasses SEALJudge (Gemini) on purpose, NOT judge_mistral.SEALJudge (Mistral/HF)
+    # This subclasses SEALJudge (Groq) on purpose, NOT judge_mistral.SEALJudge (Mistral/HF)
     # The ablation in Fig 5 is only valid if SEAL and No-Rubric-Evolution differ in exactly one variable: 
     # whether evolve_rubric() actually mutates the rubric
     # Using a different judge model here would confound "rubric evolution on/off" with
     # "different LLM backend" and invalidate the ablation bar chart
 
-    evaluate() is inherited unchanged (still Gemini)
+    evaluate() is inherited unchanged (still Groq)
     evolve_rubric() is overridden to be a true no-op: returns the input rubric, similarity 1.0
     (identical) and was_updated=False
     so rubric_hash and rubric_drift_score stay flat across iterations

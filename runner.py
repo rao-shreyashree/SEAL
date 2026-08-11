@@ -13,25 +13,110 @@ from seal.scenarios import MultiScenarioALFWorldEnv
 from seal.task_result import TaskResult, make_rubric_hash
 from seal.judge import JudgeFixed, SEALJudge, DEFAULT_RUBRIC, trace_to_str
 
+
+# Groq key rotation
+# load from keys.json
+# format: {"keys": ["gsk_...", "gsk_...", ...]}
+# each key = one Groq account's free-tier quota (1000 RPD, 30 RPM)
+# auto-switches when a key hits the per-key call ceiling (KEY_CALL_CEILING)
+# SEALJudge/JudgeFixed read GROQ_API_KEY from env - _rotate_key() 
+# patches os.environ so the judge picks up the new key without reinit
+
+KEY_CALL_CEILING = 900  # Groq free tier: 1000 RPD/key
+
+def _load_keys(path: str = "keys.json") -> list:
+    if not os.path.exists(path):
+        key = os.environ.get("GROQ_API_KEY", "")
+        return [key] if key else []
+    with open(path) as f:
+        return json.load(f)["keys"]
+
+class KeyRotator:
+    """
+    # critical section
+    # do not change without us discussing
+    # patching os.environ is the only way to hot-swap the key without
+    # reinitializing SEALJudge - judge reads GROQ_API_KEY at call time via os.environ.get() in judge.py, not at __init__ time
+    """
+    def __init__(self, keys: list):
+        if not keys:
+            raise ValueError("No Groq API keys found. Add keys.json or set GROQ_API_KEY env var.")
+        self.keys = keys
+        self.index = 0
+        self.calls_on_current_key = 0
+        self._total_calls_made = 0
+        self._apply_current()
+
+    def _apply_current(self):
+        os.environ["GROQ_API_KEY"] = self.keys[self.index]
+
+    def tick(self):
+        """Call once per judge API call. Rotates key if ceiling hit."""
+        self.calls_on_current_key += 1
+        self._total_calls_made += 1
+        if self.calls_on_current_key >= KEY_CALL_CEILING:
+            if self.index + 1 >= len(self.keys):
+                raise RuntimeError(
+                    f"[KEY EXHAUSTED] All {len(self.keys)} keys have hit their ceiling "
+                    f"({KEY_CALL_CEILING} calls each). Rotate in new keys or wait 24h."
+                )
+            self.index += 1
+            self.calls_on_current_key = 0
+            self._apply_current()
+            print(f"[KEY ROTATED] Switched to key index {self.index} "
+                  f"(key ...{self.keys[self.index][-6:]})")
+
+    def force_rotate(self, reason: str = ""):
+        """Immediate rotation on a real API error (e.g. 429 TPD/RPD limit),
+        instead of waiting for the proactive call-count ceiling in tick().
+        tick() alone doesn't catch this - this counts calls, not tokens, so a
+        token-per-day limit can be hit well before KEY_CALL_CEILING trips."""
+        if self.index + 1 >= len(self.keys):
+            raise RuntimeError(
+                f"[KEY EXHAUSTED] All {len(self.keys)} keys exhausted. {reason}"
+            )
+        self._total_calls_made += self.calls_on_current_key 
+        self.index += 1
+        self.calls_on_current_key = 0
+        self._apply_current()
+        print(f"[KEY FORCE-ROTATED] {reason} -> switched to key index {self.index} "
+              f"(key ...{self.keys[self.index][-6:]})")
+
+    @property
+    def total_calls(self) -> int:
+        return self._total_calls_made + self.calls_on_current_key
+
+    def status(self) -> dict:
+        return {
+            "active_key_index": self.index,
+            "calls_on_current_key": self.calls_on_current_key,
+            "total_keys": len(self.keys),
+            "total_calls": self.total_calls,
+        }
+
+
 class SEALRunner:
-    def __init__(self, condition: str = "SEAL_FULL", output_dir: str = "./seallogs"):
+    def __init__(self, condition: str = "SEAL_FULL", output_dir: str = "./seallogs",
+                 rotator: KeyRotator = None):
         self.agent = SEALAgent()
         self.env = MultiScenarioALFWorldEnv()
         self.condition = condition
         self.output_dir = output_dir
+        self.rotator = rotator  # shared across the full run, not per-task
         os.makedirs(self.output_dir, exist_ok=True)
         
         if condition == "NO_RUBRIC_EVOLUTION":
-            self.judge = JudgeFixed() 
+            self.judge = JudgeFixed(rotator=self.rotator) 
         else:
-            self.judge = SEALJudge()   
+            self.judge = SEALJudge(rotator=self.rotator)
 
-    def run_task_lifecycle(self, scenario_id: int) -> tuple[list, int]:
+    def run_task_lifecycle(self, scenario_id: int, task_id: str = None) -> tuple[list, int]:
         self.env.set_scenario(scenario_id)
         goal, _ = self.env.reset()
         
         active_rubric = DEFAULT_RUBRIC.copy()
-        task_id = f"task_{str(scenario_id + 1).zfill(3)}"
+        if task_id is None:
+            task_id = f"task_{str(scenario_id + 1).zfill(3)}"
         task_iteration_history = []
         failure_history_buffer = []
         calls_made = 0
@@ -41,9 +126,14 @@ class SEALRunner:
         for iteration in range(1, 4):
             self.env.set_scenario(scenario_id)
             
-            rubric_string_representation = json.dumps(active_rubric, indent=2)
+            # Strip _seal_hints before serializing — hints are agent-internal signals,
+            # must not leak into TaskResult.rubric_text, judge.evaluate()'s prompt,
+            # or rubric_hash. The live active_rubric dict keeps the hints so
+            # agent.execute() can read them via _read_rubric_hints(rubric).
+            rubric_for_logging = {k: v for k, v in active_rubric.items() if k != "_seal_hints"}
+            rubric_string_representation = json.dumps(rubric_for_logging, indent=2)
             action_plan = self.agent.plan(task=goal, rubric=rubric_string_representation)
-            trace_output = self.agent.execute(plan=action_plan, env=self.env, rubric=rubric_string_representation)
+            trace_output = self.agent.execute(plan=action_plan, env=self.env, rubric=active_rubric)  # pass dict so _read_rubric_hints() works
 
             is_success = trace_output["final_outcome"] == "SUCCESS"
             trajectory = trace_output["trajectory"]
@@ -57,6 +147,8 @@ class SEALRunner:
             formatted_trace_str = trace_to_str(trajectory)
             evaluation_report = self.judge.evaluate(trace=formatted_trace_str, rubric=active_rubric)
             calls_made += 1 # Tracking active evaluate calls
+            if self.rotator:
+                self.rotator.tick()
 
             if is_success:
                 strategy_label = "none"
@@ -96,6 +188,7 @@ class SEALRunner:
                 strategy_label=strategy_label,
                 rubric_text=rubric_string_representation,
             )
+            result.rubric_drift_score = 0.0  # default; overwritten below if evolve ran
 
             log_filename = os.path.join(self.output_dir, f"trace_{self.condition}_{task_id}_iter_{iteration}.json")
             with open(log_filename, "w") as f:
@@ -107,13 +200,19 @@ class SEALRunner:
             if is_success:
                 break
 
-            if not is_success:
+            # evolve only after iteration 2 failure, not iteration 1
+            # this cuts evolve calls 2->1 per failing task
+            # evaluate() is never skipped
+            if not is_success and iteration < 3 and iteration >= 2:
                 try:
                     new_rubric, similarity_score, was_updated = self.judge.evolve_rubric(
                         rubric=active_rubric, 
                         failure_history=failure_history_buffer
                     )
-                    calls_made += 1 # Tracking active evolve calls
+                    calls_made += 1  # Tracking active evolve calls
+                    if self.rotator:
+                        self.rotator.tick()
+                    result.rubric_drift_score = similarity_score  # log drift regardless of was_updated
                     if was_updated and isinstance(new_rubric, dict):
                         active_rubric = new_rubric
                 except ImportError as ie:
@@ -122,29 +221,44 @@ class SEALRunner:
 
         return task_iteration_history, calls_made
 
-def run_comprehensive_suite():
+def run_comprehensive_suite(max_calls: int = 200):
     # 50-task full run, no scope reduction
+    # max_calls is a quota guard - stops before burning through key rotation budget
     total_scenarios = 50  # 5 will produce a partial run. our benchmark is 50 tasks
-    runner = SEALRunner(condition="SEAL_FULL")
+    rotator = KeyRotator(_load_keys())
+    runner = SEALRunner(condition="SEAL_FULL", rotator=rotator)
     all_results = {}
+    per_task_calls = {}  # per-task call visibility for quota planning
 
-    # No request cap — allow complete benchmark evaluation
-    request_count = 0
     print("=== Launching SEAL Runner Production Benchmark ===")
+    print(f"Keys loaded: {len(rotator.keys)} | Ceiling per key: {KEY_CALL_CEILING} | Max calls: {max_calls}")
+
     for sid in range(total_scenarios):
+        if rotator.total_calls >= max_calls:
+            print(f"[STOPPED] Hit max_calls budget ({max_calls}) at scenario {sid}. "
+                  f"Rotate keys or raise max_calls to continue.")
+            break
         try:
-            results, calls = runner.run_task_lifecycle(scenario_id=sid)
-            request_count += calls
-            all_results[f"task_{str(sid+1).zfill(3)}"] = [r.to_dict() for r in results]
-            time.sleep(3)
+            task_key = f"task_{str(sid + 1).zfill(3)}"
+            results, calls = runner.run_task_lifecycle(scenario_id=sid % 20, task_id=task_key)
+            all_results[task_key] = [r.to_dict() for r in results]
+            per_task_calls[task_key] = calls
+            print(f"  {task_key}: {calls} calls | key status: {rotator.status()}")
+            time.sleep(2)  # Groq free tier: 30 RPM -> 2s
+        except RuntimeError as e:
+            # KeyRotator raises RuntimeError when all keys exhausted
+            print(f"[KEY EXHAUSTION] {e}")
+            break
         except Exception as e:
-            print(f"Skipping scenario index {sid}: {e}")
-            
+            print(f"Skipping scenario {sid}: {e}")
+
     with open(os.path.join(runner.output_dir, "production_runner_summary.json"), "w") as f:
         json.dump(all_results, f, indent=2)
-    print(f"\nEvaluation summary written cleanly to {runner.output_dir}/production_runner_summary.json")
-    print(f"\nTotal judge calls: {request_count}")
+    with open(os.path.join(runner.output_dir, "production_call_counts.json"), "w") as f:
+        json.dump(per_task_calls, f, indent=2)
+    print(f"\nEvaluation summary: {runner.output_dir}/production_runner_summary.json")
+    print(f"Per-task call counts: {runner.output_dir}/production_call_counts.json")
+    print(f"Final key status: {rotator.status()}")
 
 if __name__ == "__main__":
-    run_comprehensive_suite()
-    
+    run_comprehensive_suite(max_calls=1000)
