@@ -176,7 +176,7 @@ def run_no_rubric_evolution(total: int = TOTAL_SCENARIOS) -> None:
     print(f"\n=== NO_RUBRIC_EVOLUTION Ablation ({total} tasks) ===")
 
     # Import here so missing Gemini key doesn't crash other conditions
-    from seal.runner import SEALRunner
+    from runner import SEALRunner  # runner.py is at repo root, not inside seal/
 
     runner = SEALRunner(
         condition="NO_RUBRIC_EVOLUTION",
@@ -188,7 +188,7 @@ def run_no_rubric_evolution(total: int = TOTAL_SCENARIOS) -> None:
     for sid in range(total):
         task_key = _task_key(sid)
         try:
-            results, calls = runner.run_task_lifecycle(scenario_id=sid % 20)
+            results, calls = runner.run_task_lifecycle(scenario_id=sid % 20, task_id=task_key)
             request_count += calls
             all_results[task_key] = [r.to_dict() for r in results]
             status = "✓" if any(r.success for r in results) else "✗"
