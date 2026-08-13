@@ -176,11 +176,12 @@ def run_no_rubric_evolution(total: int = TOTAL_SCENARIOS) -> None:
     print(f"\n=== NO_RUBRIC_EVOLUTION Ablation ({total} tasks) ===")
 
     # Import here so missing Groq key doesn't crash other conditions
-    from seal.runner import SEALRunner
+    from seal.runner import SEALRunner, KeyRotator, _load_keys
 
     runner = SEALRunner(
         condition="NO_RUBRIC_EVOLUTION",
         output_dir=os.path.join(OUTPUT_DIR, "no_rubric_traces"),
+        rotator=KeyRotator(_load_keys()),
     )
     all_results = {}
     request_count = 0

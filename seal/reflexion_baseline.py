@@ -47,13 +47,13 @@ class ReflexionBaseline:
         self.rubric_hash = make_rubric_hash(self.rubric)
  
     def _plan_with_memory(self, task: str, memory: str) -> str:
-        """Same Mistral call as SEALAgent.plan(), but injects reflection memory
+        """Same planner call as SEALAgent.plan(), but injects reflection memory
         instead of an evolving rubric. The rubric text itself is never touched"""
         if not memory:
             return self.agent.plan(task=task, rubric=self.rubric)
- 
+
         prompt = (
-            f"[INST] You are a household task planning agent.\n"
+            f"You are a household task planning agent.\n"
             f"Rubric: {self.rubric}\n"
             f"Reflection from your previous attempt: {memory}\n"
             f"Task: {task}\n\n"
@@ -61,19 +61,22 @@ class ReflexionBaseline:
             f"taking your previous reflection into account. "
             f"Each step must be a single executable action such as "
             f"'go to <object>', 'open <object>', 'put <item> in <container>', or "
-            f"'examine <item> using <object>'. Output ONLY the numbered plan, no preamble. [/INST]"
+            f"'examine <item> using <object>'. Output ONLY the numbered plan, no preamble."
         )
         try:
-            response = self.agent.client.text_generation(
-                prompt, max_new_tokens=256, temperature=0.3, do_sample=True,
+            completion = self.agent.client.chat.completions.create(
+                model=self.agent.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=256,
             )
-            return response.strip()
+            return completion.choices[0].message.content.strip()
         except Exception as e:
             return (
                 f"1. Go to container\n2. Open container\n3. Place item\n"
-                f"[FALLBACK - Mistral unavailable: {e}]"
+                f"[FALLBACK - Groq unavailable: {e}]"
             )
- 
+
     def _reflect(self, task: str, trace_output: dict) -> str:
         """Agent reflects verbally on its own failed trajectory. Same model, same
         voice as the agent itself - no separate evaluator persona, no judge"""
@@ -82,20 +85,23 @@ class ReflexionBaseline:
             for s in trace_output["trajectory"]
         )
         prompt = (
-            f"[INST] You just attempted the following task and failed:\n"
+            f"You just attempted the following task and failed:\n"
             f"Task: {task}\n"
             f"Your plan was:\n{trace_output['macro_plan']}\n\n"
             f"What you actually did:\n{trajectory_summary}\n\n"
             f"In 2-3 sentences, reflect on what went wrong and what you should do "
-            f"differently next time. Be specific and actionable. [/INST]"
+            f"differently next time. Be specific and actionable."
         )
         try:
-            response = self.agent.client.text_generation(
-                prompt, max_new_tokens=128, temperature=0.3, do_sample=True,
+            completion = self.agent.client.chat.completions.create(
+                model=self.agent.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=128,
             )
-            return response.strip()
+            return completion.choices[0].message.content.strip()
         except Exception as e:
-            return f"[FALLBACK reflection - Mistral unavailable: {e}]"
+            return f"[FALLBACK reflection - Groq unavailable: {e}]"
  
     def run(self, env, task_id: str) -> list:
         """Runs up to self.max_iterations attempts on one task. Returns

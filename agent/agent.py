@@ -1,6 +1,6 @@
 import os
 import re
-from huggingface_hub import InferenceClient
+from groq import Groq
 
 # Valid ALFWorld action verbs for plan coherence scoring
 VALID_ACTION_VERBS = ["go to", "open", "put", "place", "examine", "pick up", "take", "close"]
@@ -15,7 +15,7 @@ def _read_rubric_hints(rubric) -> list:
     Returns a list of hint strings e.g. ["CONTEXT_LOSS_ADDRESSED", "GOAL_DRIFT_ADDRESSED"].
     Returns [] if no hints present (seed rubric, JudgeFixed, or evolution produced no diff).
 
-    This is the ONLY place agent.py reads rubric structure — it never inspects
+    This is the ONLY place agent.py reads rubric structure - it never inspects
     individual criteria keys, so Anagha can rename rubric fields freely without
     breaking agent behavior.
     """
@@ -32,7 +32,7 @@ def _read_rubric_hints(rubric) -> list:
 
 def compute_plan_coherence(plan: str) -> float:
     """
-    Parses Mistral's plan output and returns a 0.0–1.0 coherence score.
+    Parses the planner's output and returns a 0.0–1.0 coherence score.
     Criteria: numbered steps, valid action verbs, no empty lines mid-plan.
     Exported in TaskResult so Shreyashree can use it as a metric directly.
     """
@@ -54,27 +54,25 @@ def compute_plan_coherence(plan: str) -> float:
 
 class SEALAgent:
 
-    def __init__(self, hf_token=None):
-        token = hf_token or os.environ.get("HF_TOKEN")
-        # provider="auto" routes through HF Inference Providers (nebius, sambanova, etc.)
-        # instead of hf-inference, which as of mid-2025 only serves CPU tasks like
-        # embeddings/classification and no longer serves LLMs.
-        # This is what broke Mistral-7B text_generation — it was routing through hf-inference.
-        self.client = InferenceClient(
-            provider="auto",
-            api_key=token,
-        )
+    def __init__(self, api_key=None):
+        # Migrated off HF Inference Providers (provider="auto" + Qwen2.5-7B)
+        # after persistent 402s across accounts, including brand-new tokens
+        # with $0 usage - root cause: provider="auto" routing this model
+        # through a paid-only backend, not genuine per-account depletion.
+        # Groq's llama-3.1-8b-instant is smaller/faster and sufficient for planning.
+        self.client = Groq(api_key=api_key or os.environ.get("GROQ_API_KEY"))
+        self.model_name = "llama-3.1-8b-instant"
         self.steps_history = []
         self.consecutive_failures = 0
 
-    def plan(self, task: str, rubric: str) -> str:
-        """Calls Qwen2.5-7B-Instruct via HF Inference Providers to generate a structured action plan.
+    def plan(self, task: str, rubric: str, max_retries: int = 3, retry_delay: float = 5.0) -> str:
+        """Calls llama-3.1-8b-instant via Groq to generate a structured action plan.
 
-        Model history (for reference):
-          Mistral-Nemo-Instruct-2407  — chat.completions, "not a chat model" error, FALLBACK every task
-          Mistral-7B-Instruct-v0.3    — text_generation, routed through hf-inference (CPU only), broken
-          HuggingFaceH4/zephyr-7b-beta — chat.completions workaround, unstable
-          Qwen/Qwen2.5-7B-Instruct    — chat.completions + provider=auto, stable on free HF token ✓
+        Retries transient failures before falling back - a single flaky call
+        used to permanently corrupt strategy_used/plan_coherence for that
+        iteration. On 401/429/invalid_api_key, rebuilds self.client from the
+        current GROQ_API_KEY env value, in case KeyRotator rotated keys on
+        the judge side mid-run.
         """
         system_prompt = "You are a household task planning agent."
         user_message = (
@@ -85,22 +83,33 @@ class SEALAgent:
             f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
             f"Output ONLY the numbered plan, no preamble."
         )
-        try:
-            completion = self.client.chat.completions.create(
-                model="Qwen/Qwen2.5-7B-Instruct",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
-                temperature=0.3,
-                max_tokens=256,
-            )
-            return completion.choices[0].message.content.strip()
-        except Exception as e:
-            return (
-                f"1. Go to container\n2. Open container\n3. Place item\n"
-                f"[FALLBACK - Qwen unavailable: {e}]"
-            )
+
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                completion = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    temperature=0.3,
+                    max_tokens=256,
+                )
+                return completion.choices[0].message.content.strip()
+            except Exception as e:
+                last_err = e
+                err_str = str(e).lower()
+                if "401" in err_str or "429" in err_str or "invalid_api_key" in err_str:
+                    self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(retry_delay)
+
+        return (
+            f"1. Go to container\n2. Open container\n3. Place item\n"
+            f"[FALLBACK - Groq planner unavailable: {last_err}]"
+        )
 
     def _detect_failure_type(self, success: bool, trajectory: list) -> str:
         """Intrinsic failure diagnostic engine (independent from environmental oracle).
@@ -179,26 +188,26 @@ class SEALAgent:
 
             forced_outcome = env.data["forced_outcome"]
 
-            # Strategy selection — ordered by priority.
+            # Strategy selection - ordered by priority.
             # Rubric hints from judge.evolve_rubric() tell us which failure type
             # the judge addressed in its latest rewrite. We check hints (substance)
             # not literal marker strings (option-a from design discussion).
             # "CONTEXT_LOSS_ADDRESSED" in hints means the judge added rules targeting
-            # loop/stagnation — agent should attempt escape actions, not just "look".
-            # "GOAL_DRIFT_ADDRESSED" means the judge flagged wrong-item substitution —
+            # loop/stagnation - agent should attempt escape actions, not just "look".
+            # "GOAL_DRIFT_ADDRESSED" means the judge flagged wrong-item substitution -
             # agent should stay on the correct item instead of drifting.
             hints = _read_rubric_hints(rubric)
             context_loss_rubric_updated = "CONTEXT_LOSS_ADDRESSED" in hints
             goal_drift_rubric_updated   = "GOAL_DRIFT_ADDRESSED" in hints
 
             if forced_outcome == "CONTEXT_LOSS" and not context_loss_rubric_updated:
-                # Judge hasn't addressed context loss yet — agent stays stuck (stagnates)
+                # Judge hasn't addressed context loss yet - agent stays stuck (stagnates)
                 action = "look"
             elif self.consecutive_failures >= 2:
                 # Recovery: skip ahead to placement attempt
                 action = f"put {item} in {target} 1"
             elif forced_outcome == "GOAL_DRIFT" and step_count >= 3 and not goal_drift_rubric_updated:
-                # Judge hasn't addressed goal drift yet — agent drifts to wrong item
+                # Judge hasn't addressed goal drift yet - agent drifts to wrong item
                 action = f"put {drift_item} in {target} 1"
             elif sequence_state == 0:
                 action = f"go to {target} 1"
@@ -249,7 +258,7 @@ class SEALAgent:
         confidence_score = confidence_map.get(detected_failure_type, 0.50)
         plan_coherence = compute_plan_coherence(plan)
 
-        # Behavioral drift recovery: 
+        # Behavioral drift recovery:
         # did the agent initially drift to the wrong item, then later place the correct item in the same trajectory?
         drifted_at_some_step = any(
             "wrong item" in s["observation_received"].lower()
