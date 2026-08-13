@@ -160,18 +160,18 @@ Generate evaluation results adhering to this exact schema layout structure:
         # being interchangeable here
         """
         user_message = f"""CURRENT RUBRIC STRUCTURE:
-{json.dumps(rubric, indent=2)}
+        {json.dumps(rubric, indent=2)}
 
-HISTORICAL FAILURES OBSERVED IN ACTIVE TESTING WINDOW:
-{json.dumps(failure_history, indent=2)}
+        HISTORICAL FAILURES OBSERVED IN ACTIVE TESTING WINDOW:
+        {json.dumps(failure_history, indent=2)}
 
-INSTRUCTIONS:
-Given these past failures, rewrite the rubric configuration rules array blocks to catch this failure type earlier!
-Maintain the exact same JSON criteria keys, but alter or append specific 'rules' strings defensively.
-Keep total cumulative weights totaling exactly 1.0.
+        INSTRUCTIONS:
+        Given these past failures, rewrite the rubric configuration rules array blocks to catch this failure type earlier!
+        Maintain the exact same JSON criteria keys, but alter or append specific 'rules' strings defensively.
+        Keep total cumulative weights totaling exactly 1.0.
 
-Return the modified rubric as a clean JSON dictionary matching the original root structural schema.
-"""
+        Return the modified rubric as a clean JSON dictionary matching the original root structural schema.
+        """
         try:
             completion = self.client.chat.completions.create(
                 model=self.model_id,
@@ -202,6 +202,33 @@ Return the modified rubric as a clean JSON dictionary matching the original root
                 f"{drift_floor}. Rubric mutation discarded."
             )
             return rubric, similarity, False
+
+        # Option-a hints
+        # same keyword-diff logic as seal.judge.SEALJudge, kept identical so agent.py's _read_rubric_hints() behaves the same regardless of which judge backend produced the rubric
+        context_kw = ["loop", "repeat", "stagnation", "revisit", "context", "remember", "retain"]
+        drift_kw   = ["target", "substitut", "correct item", "wrong item", "drift", "goal object"]
+        exec_kw    = ["block", "jam", "cannot open", "locked", "obstacle", "stuck"]
+
+        def _rules_text(r: Dict[str, Any]) -> str:
+            parts = []
+            for v in r.values():
+                if isinstance(v, dict):
+                    parts.extend(v.get("rules", []))
+                    parts.append(v.get("description", ""))
+            return " ".join(parts).lower()
+
+        new_txt = _rules_text(new_rubric)
+        old_txt = _rules_text(rubric)
+
+        hints = []
+        if any(k in new_txt and k not in old_txt for k in context_kw):
+            hints.append("CONTEXT_LOSS_ADDRESSED")
+        if any(k in new_txt and k not in old_txt for k in drift_kw):
+            hints.append("GOAL_DRIFT_ADDRESSED")
+        if any(k in new_txt and k not in old_txt for k in exec_kw):
+            hints.append("EXECUTION_ERROR_ADDRESSED")
+
+        new_rubric["_seal_hints"] = hints
 
         return new_rubric, similarity, True
 

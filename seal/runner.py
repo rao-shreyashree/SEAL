@@ -5,6 +5,7 @@ import sys
 
 # Force absolute path inclusion for sub-module relative namespace mapping
 root_path = os.path.dirname(os.path.abspath(__file__))
+
 if root_path not in sys.path:
     sys.path.insert(0, root_path)
 
@@ -33,10 +34,9 @@ def _load_keys(path: str = "keys.json") -> list:
 
 class KeyRotator:
     """
-    # critical section
-    # do not change without us discussing
-    # patching os.environ is the only way to hot-swap the key without
-    # reinitializing SEALJudge - judge reads GROQ_API_KEY at call time via os.environ.get() in judge.py, not at __init__ time
+    Patching os.environ is the only way to hot-swap the key without
+    reinitializing SEALJudge - judge reads GROQ_API_KEY at call time via
+    os.environ.get() in judge.py, not at __init__ time.
     """
     def __init__(self, keys: list):
         if not keys:
@@ -125,23 +125,87 @@ class SEALRunner:
 
         for iteration in range(1, 4):
             self.env.set_scenario(scenario_id)
-            
-            rubric_string_representation = json.dumps(active_rubric, indent=2)
-            action_plan = self.agent.plan(task=goal, rubric=rubric_string_representation)
-            trace_output = self.agent.execute(plan=action_plan, env=self.env, rubric=rubric_string_representation)
 
-            is_success = trace_output["final_outcome"] == "SUCCESS"
+            # Strip _seal_hints before serializing — hints are agent-internal
+            # signals, must not leak into TaskResult.rubric_text,
+            # judge.evaluate()'s prompt, or rubric_hash.
+            #
+            # The live active_rubric dict keeps the hints so agent.execute()
+            # can read them via _read_rubric_hints(rubric).
+
+            rubric_for_logging = {
+                k: v
+                for k, v in active_rubric.items()
+                if k != "_seal_hints"
+            }
+
+            rubric_string_representation = json.dumps(
+                rubric_for_logging,
+                indent=2,
+            )
+
+            action_plan = self.agent.plan(
+                task=goal,
+                rubric=rubric_string_representation,
+            )
+
+            # IMPORTANT:
+            # Agent receives active_rubric, including _seal_hints,
+            # because Scenario A requires the agent to react to the
+            # substantive rubric evolution signal.
+            trace_output = self.agent.execute(
+                plan=action_plan,
+                env=self.env,
+                rubric=active_rubric,
+            )
+
+            is_success = (
+                trace_output["final_outcome"] == "SUCCESS"
+            )
+
             trajectory = trace_output["trajectory"]
             total_steps = len(trajectory)
 
-            stagnant_steps = sum(1 for s in trajectory if s["internal_loop_alert"] is not None)
-            unique_actions = len(set(s["action_executed"] for s in trajectory))
-            stagnation_rate = round(stagnant_steps / total_steps, 2) if total_steps > 0 else 0.0
-            agent_failure_type = trace_output["detected_failure_type"]
-            
-            formatted_trace_str = trace_to_str(trajectory)
-            evaluation_report = self.judge.evaluate(trace=formatted_trace_str, rubric=active_rubric)
-            calls_made += 1 # Tracking active evaluate calls
+            stagnant_steps = sum(
+                1
+                for s in trajectory
+                if s["internal_loop_alert"] is not None
+            )
+
+            unique_actions = len(
+                set(
+                    s["action_executed"]
+                    for s in trajectory
+                )
+            )
+
+            stagnation_rate = (
+                round(stagnant_steps / total_steps, 2)
+                if total_steps > 0
+                else 0.0
+            )
+
+            agent_failure_type = trace_output[
+                "detected_failure_type"
+            ]
+
+            formatted_trace_str = trace_to_str(
+                trajectory
+            )
+
+            # IMPORTANT:
+            # Judge receives rubric_for_logging, NOT active_rubric.
+            #
+            # This keeps _seal_hints internal to the agent. The judge
+            # evaluates against the actual rubric criteria and does not
+            # see the behavioral control signal that was derived from it.
+            evaluation_report = self.judge.evaluate(
+                trace=formatted_trace_str,
+                rubric=rubric_for_logging,
+            )
+
+            calls_made += 1
+
             if self.rotator:
                 self.rotator.tick()
 
@@ -166,20 +230,62 @@ class SEALRunner:
                 rubric_hash=make_rubric_hash(rubric_string_representation),
                 raw_trace=trajectory,
                 task_description=goal,
-                # Normalize: env uses "SUCCESS" string; contract field uses "NONE" on success
-                # "SUCCESS" as oracle_failure_type breaks Fig 2 grouping for successful tasks
-                oracle_failure_type="NONE" if self.env.data["forced_outcome"] == "SUCCESS" else self.env.data["forced_outcome"],
-                agent_confidence=trace_output["agent_intrinsic_confidence"],
-                plan_coherence=trace_output["plan_coherence"],
+
+                # Normalize: env uses "SUCCESS" string;
+                # contract field uses "NONE" on success.
+                #
+                # "SUCCESS" as oracle_failure_type breaks Fig 2
+                # grouping for successful tasks.
+                oracle_failure_type=(
+                    "NONE"
+                    if self.env.data["forced_outcome"] == "SUCCESS"
+                    else self.env.data["forced_outcome"]
+                ),
+
+                agent_confidence=trace_output[
+                    "agent_intrinsic_confidence"
+                ],
+
+                plan_coherence=trace_output[
+                    "plan_coherence"
+                ],
+
                 total_steps=total_steps,
+
                 stagnation_step_count=stagnant_steps,
+
                 trajectory_stagnation_rate=stagnation_rate,
+
                 unique_action_count=unique_actions,
-                action_density_index=round(unique_actions / total_steps, 2) if total_steps > 0 else 0.0,
-                judge_score=getattr(evaluation_report, "score", 0.0),
+
+                action_density_index=(
+                    round(
+                        unique_actions / total_steps,
+                        2,
+                    )
+                    if total_steps > 0
+                    else 0.0
+                ),
+
+                judge_score=getattr(
+                    evaluation_report,
+                    "score",
+                    0.0,
+                ),
+
                 judge_failure_type=extracted_failure_str,
-                judge_explanation=getattr(evaluation_report, "explanation", ""),
-                drift_recovered=trace_output.get("drift_recovered", False),
+
+                judge_explanation=getattr(
+                    evaluation_report,
+                    "explanation",
+                    "",
+                ),
+
+                drift_recovered=trace_output.get(
+                    "drift_recovered",
+                    False,
+                ),
+
                 strategy_label=strategy_label,
                 rubric_text=rubric_string_representation,
             )
@@ -200,28 +306,54 @@ class SEALRunner:
             # evaluate() is never skipped
             if not is_success and iteration < 3 and iteration >= 2:
                 try:
-                    new_rubric, similarity_score, was_updated = self.judge.evolve_rubric(
-                        rubric=active_rubric, 
-                        failure_history=failure_history_buffer
+                    new_rubric, similarity_score, was_updated = (
+                        self.judge.evolve_rubric(
+                            rubric=active_rubric,
+                            failure_history=failure_history_buffer,
+                        )
                     )
-                    calls_made += 1  # Tracking active evolve calls
+
+                    calls_made += 1
+
                     if self.rotator:
                         self.rotator.tick()
-                    result.rubric_drift_score = similarity_score  # log drift regardless of was_updated
-                    if was_updated and isinstance(new_rubric, dict):
+
+                    result.rubric_drift_score = (
+                        similarity_score
+                    )
+
+                    if (
+                        was_updated
+                        and isinstance(new_rubric, dict)
+                    ):
                         active_rubric = new_rubric
+
                 except ImportError as ie:
-                    print(f"[{task_id} Iteration {iteration} Rubric Drift Bypass]: {ie}")
+                    print(
+                        f"[{task_id} Iteration {iteration} "
+                        f"Rubric Drift Bypass]: {ie}"
+                    )
                     break
 
         return task_iteration_history, calls_made
 
+
 def run_comprehensive_suite(max_calls: int = 200):
     # 50-task full run, no scope reduction
-    # max_calls is a quota guard - stops before burning through key rotation budget
+    # max_calls is a quota guard - stops before burning through
+    # key rotation budget
+
     total_scenarios = 50  # 5 will produce a partial run. our benchmark is 50 tasks
-    rotator = KeyRotator(_load_keys())
-    runner = SEALRunner(condition="SEAL_FULL", rotator=rotator)
+
+    rotator = KeyRotator(
+        _load_keys()
+    )
+
+    runner = SEALRunner(
+        condition="SEAL_FULL",
+        rotator=rotator,
+    )
+
     all_results = {}
     per_task_calls = {}  # per-task call visibility for quota planning
 
@@ -234,26 +366,73 @@ def run_comprehensive_suite(max_calls: int = 200):
                   f"Rotate keys or raise max_calls to continue.")
             break
         try:
-            task_key = f"task_{str(sid + 1).zfill(3)}"
-            results, calls = runner.run_task_lifecycle(scenario_id=sid % 20, task_id=task_key)
-            all_results[task_key] = [r.to_dict() for r in results]
+            task_key = (
+                f"task_{str(sid + 1).zfill(3)}"
+            )
+
+            results, calls = runner.run_task_lifecycle(
+                scenario_id=sid % 20,
+                task_id=task_key,
+            )
+
+            all_results[task_key] = [
+                r.to_dict()
+                for r in results
+            ]
+
             per_task_calls[task_key] = calls
             print(f"  {task_key}: {calls} calls | key status: {rotator.status()}")
             time.sleep(2)  # Groq free tier: 30 RPM -> 2s
+
         except RuntimeError as e:
             # KeyRotator raises RuntimeError when all keys exhausted
             print(f"[KEY EXHAUSTION] {e}")
             break
+
         except Exception as e:
             print(f"Skipping scenario {sid}: {e}")
 
-    with open(os.path.join(runner.output_dir, "production_runner_summary.json"), "w") as f:
-        json.dump(all_results, f, indent=2)
-    with open(os.path.join(runner.output_dir, "production_call_counts.json"), "w") as f:
-        json.dump(per_task_calls, f, indent=2)
-    print(f"\nEvaluation summary: {runner.output_dir}/production_runner_summary.json")
-    print(f"Per-task call counts: {runner.output_dir}/production_call_counts.json")
-    print(f"Final key status: {rotator.status()}")
+    with open(
+        os.path.join(
+            runner.output_dir,
+            "production_runner_summary.json",
+        ),
+        "w",
+    ) as f:
+        json.dump(
+            all_results,
+            f,
+            indent=2,
+        )
+
+    with open(
+        os.path.join(
+            runner.output_dir,
+            "production_call_counts.json",
+        ),
+        "w",
+    ) as f:
+        json.dump(
+            per_task_calls,
+            f,
+            indent=2,
+        )
+
+    print(
+        f"\nEvaluation summary: "
+        f"{runner.output_dir}/production_runner_summary.json"
+    )
+
+    print(
+        f"Per-task call counts: "
+        f"{runner.output_dir}/production_call_counts.json"
+    )
+
+    print(
+        f"Final key status: "
+        f"{rotator.status()}"
+    )
+
 
 if __name__ == "__main__":
     run_comprehensive_suite(max_calls=1000)

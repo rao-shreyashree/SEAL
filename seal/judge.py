@@ -302,6 +302,42 @@ Return a JSON object following this exact schema structure:
             )
             return rubric, similarity, False
 
+        # Inject structured behavioral hints derived from the rubric's actual content.
+        # The agent reads _seal_hints to change action-selection — NOT literal marker strings.
+        # This is option (a) from the design discussion: agent reacts to rubric substance.
+        # Hints are computed from what actually changed between old and new rubric text,
+        # so if context_retention rules didn't change, CONTEXT_LOSS hint won't fire.
+        #
+        # _seal_hints is stripped before logging (runner strips it from rubric_string_representation)
+        # so it never leaks into TaskResult.rubric_text or judge's own evaluate() prompt.
+        context_kw = ["loop", "repeat", "stagnation", "revisit", "context", "remember", "retain"]
+        drift_kw   = ["target", "substitut", "correct item", "wrong item", "drift", "goal object"]
+        exec_kw    = ["block", "jam", "cannot open", "locked", "obstacle", "stuck"]
+
+        def _rules_text(r: dict) -> str:
+            parts = []
+            for v in r.values():
+                if isinstance(v, dict):
+                    parts.extend(v.get("rules", []))
+                    parts.append(v.get("description", ""))
+            return " ".join(parts).lower()
+
+        new_txt = _rules_text(new_rubric)
+        old_txt = _rules_text(rubric)
+
+        # Hint fires only when the relevant keyword appears in the NEW rubric
+        # but was absent from the old one — guards against spurious signals
+        # on criteria that didn't actually change.
+        hints = []
+        if any(k in new_txt and k not in old_txt for k in context_kw):
+            hints.append("CONTEXT_LOSS_ADDRESSED")
+        if any(k in new_txt and k not in old_txt for k in drift_kw):
+            hints.append("GOAL_DRIFT_ADDRESSED")
+        if any(k in new_txt and k not in old_txt for k in exec_kw):
+            hints.append("EXECUTION_ERROR_ADDRESSED")
+
+        new_rubric["_seal_hints"] = hints  # list[str], may be [] if nothing meaningfully changed
+
         return new_rubric, similarity, True
 
 

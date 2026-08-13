@@ -4,6 +4,11 @@ __pycache__/
 reflexion_baseline_stress_test.jsonl 
 # after writing functions for all 5 figures, ill push these
 fig1_success_by_iteration.png
+fig2_recovery_by_failure_type.png
+fig3_strategy_frequency.png
+fig4_rubric_drift.png
+fig5_ablation_bar.png
+fig6_max_iterations_ablation.png
 # smoke test and its results to be pushed later
 smoke_test_small.py
 seallogs_smoke/

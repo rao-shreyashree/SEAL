@@ -176,12 +176,11 @@ def run_no_rubric_evolution(total: int = TOTAL_SCENARIOS) -> None:
     print(f"\n=== NO_RUBRIC_EVOLUTION Ablation ({total} tasks) ===")
 
     # Import here so missing Groq key doesn't crash other conditions
-    from seal.runner import SEALRunner, KeyRotator, _load_keys
-    rotator = KeyRotator(_load_keys())
+    from seal.runner import SEALRunner
+
     runner = SEALRunner(
         condition="NO_RUBRIC_EVOLUTION",
         output_dir=os.path.join(OUTPUT_DIR, "no_rubric_traces"),
-        rotator=rotator,
     )
     all_results = {}
     request_count = 0
@@ -196,7 +195,7 @@ def run_no_rubric_evolution(total: int = TOTAL_SCENARIOS) -> None:
             print(f"  {task_key}: {status} ({calls} judge calls)")
         except Exception as e:
             print(f"  {task_key}: SKIP — {e}")
-        time.sleep(2)  # Groq free tier = 30 RPM so 2s
+        time.sleep(3)  # Groq rate limit buffer
 
     _write("no_rubric_evolution_summary.json", all_results)
     print(f"NO_RUBRIC_EVOLUTION complete. {len(all_results)}/{total} tasks. "
@@ -303,11 +302,10 @@ def run_mistral_judge(total: int = TOTAL_SCENARIOS) -> None:
 
                 if not is_success and iteration < 3 and iteration >= 2:
                     try:
-                        new_rubric, similarity_score, was_updated = judge.evolve_rubric(
+                        new_rubric, _, was_updated = judge.evolve_rubric(
                             rubric=active_rubric,
                             failure_history=failure_history_buffer,
                         )
-                        result.rubric_drift_score = similarity_score 
                         if was_updated and isinstance(new_rubric, dict):
                             active_rubric = new_rubric
                     except Exception as e:
