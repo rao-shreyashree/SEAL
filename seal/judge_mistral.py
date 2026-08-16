@@ -205,7 +205,10 @@ Generate evaluation results adhering to this exact schema layout structure:
 
         # Option-a hints
         # same keyword-diff logic as seal.judge.SEALJudge, kept identical so agent.py's _read_rubric_hints() behaves the same regardless of which judge backend produced the rubric
-        context_kw = ["loop", "repeat", "stagnation", "revisit", "context", "remember", "retain"]
+        context_kw = [
+                    "repeat", "stagnation", "revisit", "redundant", "no progress", "identical observation", "unproductive", "same location",
+                    "does not advance", "no new information", "prolonged", "static", "unchanged", "escape", "break the loop", "vary the action",
+                ]
         drift_kw   = ["target", "substitut", "correct item", "wrong item", "drift", "goal object"]
         exec_kw    = ["block", "jam", "cannot open", "locked", "obstacle", "stuck"]
 
@@ -228,6 +231,12 @@ Generate evaluation results adhering to this exact schema layout structure:
         if any(k in new_txt and k not in old_txt for k in exec_kw):
             hints.append("EXECUTION_ERROR_ADDRESSED")
 
+        if not hints and any(
+            h.get("failure_type") == "context_loss" for h in failure_history
+        ):
+            print(f"[HINT-MISS] CONTEXT_LOSS failure present but no keyword matched.\n"
+                  f"  new_txt sample: {new_txt[:300]}")
+            
         new_rubric["_seal_hints"] = hints
 
         return new_rubric, similarity, True

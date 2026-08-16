@@ -50,8 +50,16 @@ class MultiScenarioALFWorldEnv:
         item = self.data["item"]
         outcome = self.data["forced_outcome"]
 
-        # If a valid repair rubric is present, clear anomalies
-        if "META-REFLECTION" in rubric or "ITERATIVE-PROMPTING" in rubric:
+        hints = rubric.get("_seal_hints", []) if isinstance(rubric, dict) else []
+        legacy_repair = isinstance(rubric, str) and (
+            "META-REFLECTION" in rubric or "ITERATIVE-PROMPTING" in rubric
+        )
+
+        if legacy_repair:
+            outcome = "SUCCESS"
+        elif outcome == "CONTEXT_LOSS" and "CONTEXT_LOSS_ADDRESSED" in hints:
+            outcome = "SUCCESS"
+        elif outcome == "GOAL_DRIFT" and "GOAL_DRIFT_ADDRESSED" in hints:
             outcome = "SUCCESS"
 
         if outcome == "CONTEXT_LOSS":
