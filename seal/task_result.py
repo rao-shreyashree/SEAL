@@ -59,6 +59,14 @@ class TaskResult:
     strategy_label: str = "none"
     rubric_text: str = ""
 
+    # ── Hint channel (Tanisha — E3a) ──────────────────────────────────────
+    # Populated by SEALRunner after evolve_rubric() runs each iteration.
+    # None  = evolution did not run this iteration (iter 1, or task succeeded)
+    # []    = evolution ran but no keyword diff triggered a hint (silent event)
+    # [...] = hint tokens that reached agent.execute() next iteration
+    # Non-breaking: from_dict() loads existing logs that lack this field fine.
+    hints_emitted: Optional[List[str]] = None
+
     def to_dict(self) -> dict:
         return asdict(self)
 

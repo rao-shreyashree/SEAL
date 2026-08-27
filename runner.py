@@ -142,6 +142,18 @@ class SEALRunner:
         else:
             self.judge = SEALJudge(rotator=self.rotator)
 
+    def _write_trace(self, result, task_id: str, iteration: int) -> None:
+        """Write trace JSON after evolve_rubric() so rubric_drift_score
+        and hints_emitted are fully populated before hitting disk.
+        Fixes the bug where the old write happened before evolve ran,
+        leaving rubric_drift_score: 0.0 in every trace file."""
+        log_filename = os.path.join(
+            self.output_dir,
+            f"trace_{self.condition}_{task_id}_iter_{iteration}.json",
+        )
+        with open(log_filename, "w") as f:
+            f.write(result.to_json())
+
     def run_task_lifecycle(
         self,
         scenario_id: int,
@@ -345,35 +357,24 @@ class SEALRunner:
                 rubric_text=rubric_string_representation,
             )
 
-            result.rubric_drift_score = (
-                0.0
-            )  # default; overwritten below if evolve ran
-
-            log_filename = os.path.join(
-                self.output_dir,
-                f"trace_{self.condition}_{task_id}_iter_{iteration}.json",
-            )
-
-            with open(log_filename, "w") as f:
-                f.write(result.to_json())
+            # rubric_drift_score and hints_emitted default here.
+            # Both are overwritten below if evolve_rubric() runs.
+            # _write_trace() is called AFTER evolve so disk files are accurate.
+            result.rubric_drift_score = 0.0
+            result.hints_emitted = None  # None = evolution didn't run this iter
 
             task_iteration_history.append(result)
-
-            failure_history_buffer.append(
-                evaluation_report
-            )
+            failure_history_buffer.append(evaluation_report)
 
             if is_success:
+                # No evolve on success — write now, exit loop
+                self._write_trace(result, task_id, iteration)
                 break
 
-            # evolve only after iteration 2 failure, not iteration 1
-            # this cuts evolve calls 2->1 per failing task
-            # evaluate() is never skipped
-            if (
-                not is_success
-                and iteration < 3
-                and iteration >= 2
-            ):
+            # Evolve only on iteration 2 failure (not iter 1, not iter 3)
+            # Cuts evolve calls from 2→1 per failing task.
+            # evaluate() is never skipped.
+            if not is_success and iteration < 3 and iteration >= 2:
                 try:
                     new_rubric, similarity_score, was_updated = (
                         self.judge.evolve_rubric(
@@ -387,22 +388,31 @@ class SEALRunner:
                     if self.rotator:
                         self.rotator.tick()
 
-                    result.rubric_drift_score = (
-                        similarity_score
-                    )
+                    # Persist drift score BEFORE writing trace (fixes the bug
+                    # where trace was written before evolve ran → 0.0 on disk)
+                    result.rubric_drift_score = similarity_score
 
-                    if (
-                        was_updated
-                        and isinstance(new_rubric, dict)
-                    ):
+                    if was_updated and isinstance(new_rubric, dict):
                         active_rubric = new_rubric
+                        # Record which hint tokens will reach agent next iter
+                        result.hints_emitted = list(
+                            new_rubric.get("_seal_hints", [])
+                        )
+                    else:
+                        # Mutation rejected by drift floor or malformed rubric.
+                        # Evolution ran, hints didn't reach agent → silent event.
+                        result.hints_emitted = []
 
                 except ImportError as ie:
                     print(
                         f"[{task_id} Iteration {iteration} "
                         f"Rubric Drift Bypass]: {ie}"
                     )
+                    self._write_trace(result, task_id, iteration)
                     break
+
+            # Write AFTER evolve so rubric_drift_score + hints_emitted are set
+            self._write_trace(result, task_id, iteration)
 
         return task_iteration_history, calls_made
 
