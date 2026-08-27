@@ -2,13 +2,14 @@ __pycache__/
 *.pyc
 # this is a stress test, so ill push later
 reflexion_baseline_stress_test.jsonl 
-# after writing functions for all 5 figures, ill push these
+# these 7 figures are reproducible using the code, so im not pushing them
 fig1_success_by_iteration.png
 fig2_recovery_by_failure_type.png
 fig3_strategy_frequency.png
 fig4_rubric_drift.png
 fig5_ablation_bar.png
 fig6_max_iterations_ablation.png
+fig7_multi_metric_comparison.png
 # smoke test and its results to be pushed later
 smoke_test_small.py
 seallogs_smoke/
