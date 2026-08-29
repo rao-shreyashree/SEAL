@@ -123,24 +123,49 @@ def latex_confusion_table(confusion: dict) -> str:
  
  
 def rubric_drift_distribution(records: list) -> dict:
-    """rubric_drift_score is only set on iterations where evolve_rubric() actually ran (iteration >= 2, on failure) 
-    default 0.0 elsewhere isn't a real drift measurement, it's "no evolution attempted", so exclude it
-    Distinguish from the floor-rejection case (evolve ran, similarity computed, but mutation discarded)
-    those have a real score too and belong in the distribution; only true nulls/no-evolution get dropped.
+    """E2a. rubric_drift_score is only set by a real evolve_rubric() call.
+    In the current runner.py, that's ONLY iteration==2 on a failing task
+    (iteration >= 2 and iteration < 3 -> iteration==2 exclusively). Every
+    other iteration - 1, or 3 in a task that fails all three - keeps the
+    structural default 0.0 that's set before the loop even checks whether
+    to evolve. That default is NOT a measurement; filtering only on
+    iteration==1 (the old version of this function) let iteration-3
+    defaults leak in as if they were real near-zero similarity scores,
+    which silently doubled n and fabricated a floor-rejection rate that
+    wasn't real - confirmed on the actual data (10 events at ~0.0 that
+    turned out to be all iteration-3 structural defaults, 0 genuine
+    rejections among the 10 real evolve() calls).
+ 
+    Prefer hints_emitted (Tanisha's field) when present - it's an explicit
+    None for "evolution didn't run" vs [] for "ran, no hint", so it doesn't
+    need this iteration-number heuristic at all. Falls back to the
+    iteration==2 heuristic for logs predating that field, with a loud
+    warning since the fallback is inherently runner-version-specific.
     """
     scores = []
     skipped_no_evolution = 0
+ 
+    has_hints_field = any("hints_emitted" in r for r in records)
+    if not has_hints_field:
+        print("[rubric_drift_distribution] WARNING: no record has 'hints_emitted' - "
+              "falling back to the iteration==2 heuristic, which is tied to the "
+              "current evolve-on-iteration-2-only runner.py logic and will silently "
+              "break if that changes. Re-run with the patched runner once possible.")
+ 
     for r in records:
         s = r.get("rubric_drift_score")
         it = r.get("iteration", 1)
         if s is None:
             skipped_no_evolution += 1
             continue
-        if it == 1:
-            # iteration 1 is always 0.0 by construction (task_result.py comment: "no evolution has happened yet on the first attempt") 
-            # not a real drift measurement, exclude regardless of value
-            continue
+        if has_hints_field:
+            if r.get("hints_emitted") is None:
+                continue  # evolution didn't run this iteration
+        else:
+            if it != 2:
+                continue  # legacy heuristic: only iter 2 ever calls evolve_rubric()
         scores.append(s)
+ 
  
     if not scores:
         return {"n": 0, "scores": [], "note": "no evolve_rubric() calls found in this file"}
@@ -183,6 +208,91 @@ def rubric_drift_histogram_series(records: list, bins: int = 10):
     return edges, counts
  
  
+def hint_emission_rate(records: list) -> dict:
+    """
+    E3c. Measures how often an evolve_rubric() call emitted the hint token
+    the environment gates recovery on, vs. rewrote the rubric but stayed
+    silent (the review's §VI-A claim, currently asserted not measured).
+ 
+    CONFIRMED token scheme (judge.py on main, seen 2026-06-2x):
+      evolve_rubric() does keyword-diff between old/new rubric text and
+      appends to new_rubric["_seal_hints"]: a list containing zero or more
+      of "CONTEXT_LOSS_ADDRESSED", "GOAL_DRIFT_ADDRESSED",
+      "EXECUTION_ERROR_ADDRESSED". scenarios.py's step() reads
+      rubric["_seal_hints"] directly (rubric is now a dict at that call
+      site, not a string). This matches Tanisha's description exactly.
+ 
+    BLOCKED as of this version: judge.py's own comment states _seal_hints
+    is "stripped before logging" so it never reaches TaskResult.rubric_text.
+    That means rubric_text - the only rubric-shaped field currently on
+    TaskResult - cannot answer this question; the data is deliberately
+    removed before storage. TaskResult needs a `hints_emitted` field
+    (Tanisha's E3a) populated in runner.py (E3b) before this function has
+    anything to read. Until then this raises rather than silently
+    returning 0% and being mistaken for a real result.
+    """
+    if not records:
+        return {"error": "no records"}
+ 
+    if not any("hints_emitted" in r for r in records):
+        raise RuntimeError(
+            "No record has a 'hints_emitted' field. E3a/E3b (Tanisha: add "
+            "hints_emitted to TaskResult, populate it in runner.py after "
+            "evolve_rubric()) haven't landed yet. rubric_text can't be used "
+            "as a substitute - judge.py strips _seal_hints before it's "
+            "logged there, by design. Don't compute this from rubric_text."
+        )
+ 
+    by_task = defaultdict(list)
+    for r in records:
+        by_task[r["task_id"]].append(r)
+ 
+    expected_token = {
+        "CONTEXT_LOSS": "CONTEXT_LOSS_ADDRESSED",
+        "GOAL_DRIFT": "GOAL_DRIFT_ADDRESSED",
+        "EXECUTION_ERROR": "EXECUTION_ERROR_ADDRESSED",
+    }
+ 
+    total_events = 0
+    emitted = 0
+    by_failure_type = defaultdict(lambda: {"total": 0, "emitted": 0})
+    silent_events = []  # for Anagha's E3d manual read
+ 
+    for task_id, iters in by_task.items():
+        iters = sorted(iters, key=lambda x: x["iteration"])
+        for i in range(len(iters) - 1):
+            cur, nxt = iters[i], iters[i + 1]
+            if cur.get("success"):
+                continue
+            oracle = _normalize_oracle(cur.get("oracle_failure_type"))
+            token = expected_token.get(oracle)
+            if token is None:
+                continue
+            total_events += 1
+            by_failure_type[oracle]["total"] += 1
+            hints_next = nxt.get("hints_emitted") or []
+            if token in hints_next:
+                emitted += 1
+                by_failure_type[oracle]["emitted"] += 1
+            else:
+                silent_events.append({
+                    "task_id": task_id,
+                    "iteration": cur["iteration"],
+                    "oracle_failure_type": oracle,
+                    "expected_token": token,
+                    "hints_emitted_next": hints_next,
+                    "rubric_text_next": nxt.get("rubric_text"),  # for manual read
+                })
+ 
+    return {
+        "total_evolution_events": total_events,
+        "emitted": emitted,
+        "emission_rate": round(emitted / total_events, 3) if total_events else None,
+        "by_failure_type": dict(by_failure_type),
+        "silent_events": silent_events,
+    }
+ 
+ 
 if __name__ == "__main__":
     import sys
  
@@ -207,7 +317,7 @@ if __name__ == "__main__":
         f.write(table)
     print("\nWritten to judge_confusion_table.tex")
  
-    # rubric drift distribution
+    # E2a: rubric drift distribution
     print("\n" + "=" * 60)
     drift = rubric_drift_distribution(records)
     print("\nRubric drift distribution (evolve_rubric() calls only):")
@@ -223,5 +333,19 @@ if __name__ == "__main__":
             json.dump(drift, f, indent=2)
         print("\nWritten to rubric_drift_distribution.json (raw scores for figures.py)")
     else:
-        print("\nNo drift scores found - check if production_runner_summary.json is correctly pointed to")
+        print("\nNo drift scores found - check you're pointing at production_runner_summary.json")
+ 
+    # E3c: hint emission rate
+    print("\n" + "=" * 60)
+    try:
+        hints = hint_emission_rate(records)
+        print("\nHint emission rate:")
+        print(json.dumps({k: v for k, v in hints.items() if k != "silent_events"}, indent=2))
+        if hints["silent_events"]:
+            with open("silent_evolution_events.json", "w") as f:
+                json.dump(hints["silent_events"], f, indent=2)
+            print(f"\n{len(hints['silent_events'])} silent events written to "
+                  f"silent_evolution_events.json for Anagha's manual read (E3d)")
+    except RuntimeError as e:
+        print(f"\n[E3c blocked] {e}")
  
