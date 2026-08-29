@@ -65,6 +65,22 @@ class TaskResult:
     # for conditions that don't go through SEALJudge.evolve_rubric().
     rubric_text: Optional[str] = None
 
+    # ── Hint channel (by Tanisha, E3a) ─────────────────────────────────────────
+    # Populated by SEALRunner after evolve_rubric() runs each iteration.
+    #   None  = evolution did not run this iteration (iter 1, or task succeeded)
+    #   []    = evolution ran but produced no hint token - two distinct causes
+    #           collapse into this same empty list: (a) floor-rejected
+    #           mutation, evolve_rubric() returns before the keyword-diff
+    #           step ever runs, or (b) keyword-diff ran and found nothing.
+    #           Anagha needs rubric_drift_score alongside this to tell them
+    #           apart when reading silent events - a rejected mutation will
+    #           also show similarity < 0.45.
+    #   [...] = hint token(s) that reached agent.execute() next iteration
+    #           via active_rubric["_seal_hints"]
+    # Additive/backward-compatible: from_dict() loads old logs missing this
+    # key fine, they just get None.
+    hints_emitted: Optional[List[str]] = None
+
     def to_dict(self) -> dict:
         return asdict(self)
 

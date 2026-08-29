@@ -110,6 +110,17 @@ class SEALRunner:
         else:
             self.judge = SEALJudge(rotator=self.rotator)
 
+    def _write_trace(self, result, task_id: str, iteration: int) -> None:
+        """Write trace JSON after evolve_rubric() has run so
+        rubric_drift_score and hints_emitted are fully populated before
+        hitting disk. Writing earlier (inline right after result=TaskResult(...))
+        leaves both stale (rubric_drift_score=0.0, hints_emitted=None) on
+        disk even when evolution actually ran - same class of bug as the
+        historical rubric_drift_score=0.0 issue."""
+        log_filename = os.path.join(self.output_dir, f"trace_{self.condition}_{task_id}_iter_{iteration}.json")
+        with open(log_filename, "w") as f:
+            f.write(result.to_json())
+
     def run_task_lifecycle(self, scenario_id: int, task_id: str = None) -> tuple[list, int]:
         self.env.set_scenario(scenario_id)
         goal, _ = self.env.reset()
@@ -126,86 +137,39 @@ class SEALRunner:
         for iteration in range(1, 4):
             self.env.set_scenario(scenario_id)
 
-            # Strip _seal_hints before serializing — hints are agent-internal
+            # Strip _seal_hints before serializing - hints are agent-internal
             # signals, must not leak into TaskResult.rubric_text,
             # judge.evaluate()'s prompt, or rubric_hash.
             #
             # The live active_rubric dict keeps the hints so agent.execute()
             # can read them via _read_rubric_hints(rubric).
+            rubric_for_logging = {k: v for k, v in active_rubric.items() if k != "_seal_hints"}
+            rubric_string_representation = json.dumps(rubric_for_logging, indent=2)
 
-            rubric_for_logging = {
-                k: v
-                for k, v in active_rubric.items()
-                if k != "_seal_hints"
-            }
-
-            rubric_string_representation = json.dumps(
-                rubric_for_logging,
-                indent=2,
-            )
-
-            action_plan = self.agent.plan(
-                task=goal,
-                rubric=rubric_string_representation,
-            )
+            action_plan = self.agent.plan(task=goal, rubric=rubric_string_representation)
 
             # IMPORTANT:
-            # Agent receives active_rubric, including _seal_hints,
-            # because Scenario A requires the agent to react to the
-            # substantive rubric evolution signal.
-            trace_output = self.agent.execute(
-                plan=action_plan,
-                env=self.env,
-                rubric=active_rubric,
-            )
+            # Agent receives active_rubric, including _seal_hints, because
+            # it needs to react to the substantive rubric evolution signal.
+            trace_output = self.agent.execute(plan=action_plan, env=self.env, rubric=active_rubric)
 
-            is_success = (
-                trace_output["final_outcome"] == "SUCCESS"
-            )
-
+            is_success = trace_output["final_outcome"] == "SUCCESS"
             trajectory = trace_output["trajectory"]
             total_steps = len(trajectory)
 
-            stagnant_steps = sum(
-                1
-                for s in trajectory
-                if s["internal_loop_alert"] is not None
-            )
+            stagnant_steps = sum(1 for s in trajectory if s["internal_loop_alert"] is not None)
+            unique_actions = len(set(s["action_executed"] for s in trajectory))
+            stagnation_rate = round(stagnant_steps / total_steps, 2) if total_steps > 0 else 0.0
+            agent_failure_type = trace_output["detected_failure_type"]
 
-            unique_actions = len(
-                set(
-                    s["action_executed"]
-                    for s in trajectory
-                )
-            )
-
-            stagnation_rate = (
-                round(stagnant_steps / total_steps, 2)
-                if total_steps > 0
-                else 0.0
-            )
-
-            agent_failure_type = trace_output[
-                "detected_failure_type"
-            ]
-
-            formatted_trace_str = trace_to_str(
-                trajectory
-            )
+            formatted_trace_str = trace_to_str(trajectory)
 
             # IMPORTANT:
-            # Judge receives rubric_for_logging, NOT active_rubric.
-            #
-            # This keeps _seal_hints internal to the agent. The judge
-            # evaluates against the actual rubric criteria and does not
-            # see the behavioral control signal that was derived from it.
-            evaluation_report = self.judge.evaluate(
-                trace=formatted_trace_str,
-                rubric=rubric_for_logging,
-            )
-
+            # Judge receives rubric_for_logging, NOT active_rubric, so
+            # _seal_hints stays internal to the agent - judge evaluates
+            # against the actual rubric criteria only.
+            evaluation_report = self.judge.evaluate(trace=formatted_trace_str, rubric=rubric_for_logging)
             calls_made += 1
-
             if self.rotator:
                 self.rotator.tick()
 
@@ -230,75 +194,42 @@ class SEALRunner:
                 rubric_hash=make_rubric_hash(rubric_string_representation),
                 raw_trace=trajectory,
                 task_description=goal,
-
-                # Normalize: env uses "SUCCESS" string;
-                # contract field uses "NONE" on success.
-                #
-                # "SUCCESS" as oracle_failure_type breaks Fig 2
-                # grouping for successful tasks.
+                # Normalize: env uses "SUCCESS" string; contract field uses
+                # "NONE" on success. "SUCCESS" as oracle_failure_type breaks
+                # Fig 2 grouping for successful tasks.
                 oracle_failure_type=(
-                    "NONE"
-                    if self.env.data["forced_outcome"] == "SUCCESS"
+                    "NONE" if self.env.data["forced_outcome"] == "SUCCESS"
                     else self.env.data["forced_outcome"]
                 ),
-
-                agent_confidence=trace_output[
-                    "agent_intrinsic_confidence"
-                ],
-
-                plan_coherence=trace_output[
-                    "plan_coherence"
-                ],
-
+                agent_confidence=trace_output["agent_intrinsic_confidence"],
+                plan_coherence=trace_output["plan_coherence"],
                 total_steps=total_steps,
-
                 stagnation_step_count=stagnant_steps,
-
                 trajectory_stagnation_rate=stagnation_rate,
-
                 unique_action_count=unique_actions,
-
                 action_density_index=(
-                    round(
-                        unique_actions / total_steps,
-                        2,
-                    )
-                    if total_steps > 0
-                    else 0.0
+                    round(unique_actions / total_steps, 2) if total_steps > 0 else 0.0
                 ),
-
-                judge_score=getattr(
-                    evaluation_report,
-                    "score",
-                    0.0,
-                ),
-
+                judge_score=getattr(evaluation_report, "score", 0.0),
                 judge_failure_type=extracted_failure_str,
-
-                judge_explanation=getattr(
-                    evaluation_report,
-                    "explanation",
-                    "",
-                ),
-
-                drift_recovered=trace_output.get(
-                    "drift_recovered",
-                    False,
-                ),
-
+                judge_explanation=getattr(evaluation_report, "explanation", ""),
+                drift_recovered=trace_output.get("drift_recovered", False),
                 strategy_label=strategy_label,
                 rubric_text=rubric_string_representation,
             )
-            result.rubric_drift_score = 0.0  # default; overwritten below if evolve ran
-
-            log_filename = os.path.join(self.output_dir, f"trace_{self.condition}_{task_id}_iter_{iteration}.json")
-            with open(log_filename, "w") as f:
-                f.write(result.to_json())
+            # Defaults here; both are overwritten below if evolve_rubric()
+            # runs this iteration. hints_emitted stays None (dataclass
+            # default) unless evolution actually runs - that's the signal
+            # for "evolution didn't happen this iteration" vs "ran but
+            # emitted no hint" ([]) in analysis.py.
+            result.rubric_drift_score = 0.0
 
             task_iteration_history.append(result)
             failure_history_buffer.append(evaluation_report)
 
             if is_success:
+                # No evolve on success - write now, exit loop
+                self._write_trace(result, task_id, iteration)
                 break
 
             # evolve only after iteration 2 failure, not iteration 1
@@ -306,34 +237,33 @@ class SEALRunner:
             # evaluate() is never skipped
             if not is_success and iteration < 3 and iteration >= 2:
                 try:
-                    new_rubric, similarity_score, was_updated = (
-                        self.judge.evolve_rubric(
-                            rubric=active_rubric,
-                            failure_history=failure_history_buffer,
-                        )
+                    new_rubric, similarity_score, was_updated = self.judge.evolve_rubric(
+                        rubric=active_rubric, failure_history=failure_history_buffer,
                     )
-
                     calls_made += 1
-
                     if self.rotator:
                         self.rotator.tick()
 
-                    result.rubric_drift_score = (
-                        similarity_score
-                    )
+                    # Persist drift score BEFORE writing trace (fixes the bug
+                    # where trace was written before evolve ran -> 0.0 on disk)
+                    result.rubric_drift_score = similarity_score
 
-                    if (
-                        was_updated
-                        and isinstance(new_rubric, dict)
-                    ):
+                    if was_updated and isinstance(new_rubric, dict):
                         active_rubric = new_rubric
+                        # Record which hint tokens will reach the agent next iteration
+                        result.hints_emitted = list(new_rubric.get("_seal_hints", []))
+                    else:
+                        # Mutation rejected by drift floor or malformed rubric.
+                        # Evolution ran but no hint reaches the agent - silent event.
+                        result.hints_emitted = []
 
                 except ImportError as ie:
-                    print(
-                        f"[{task_id} Iteration {iteration} "
-                        f"Rubric Drift Bypass]: {ie}"
-                    )
+                    print(f"[{task_id} Iteration {iteration} Rubric Drift Bypass]: {ie}")
+                    self._write_trace(result, task_id, iteration)
                     break
+
+            # Write AFTER evolve so rubric_drift_score + hints_emitted are set
+            self._write_trace(result, task_id, iteration)
 
         return task_iteration_history, calls_made
 
@@ -345,14 +275,8 @@ def run_comprehensive_suite(max_calls: int = 200):
 
     total_scenarios = 50  # 5 will produce a partial run. our benchmark is 50 tasks
 
-    rotator = KeyRotator(
-        _load_keys()
-    )
-
-    runner = SEALRunner(
-        condition="SEAL_FULL",
-        rotator=rotator,
-    )
+    rotator = KeyRotator(_load_keys())
+    runner = SEALRunner(condition="SEAL_FULL", rotator=rotator)
 
     all_results = {}
     per_task_calls = {}  # per-task call visibility for quota planning
@@ -366,20 +290,11 @@ def run_comprehensive_suite(max_calls: int = 200):
                   f"Rotate keys or raise max_calls to continue.")
             break
         try:
-            task_key = (
-                f"task_{str(sid + 1).zfill(3)}"
-            )
+            task_key = f"task_{str(sid + 1).zfill(3)}"
 
-            results, calls = runner.run_task_lifecycle(
-                scenario_id=sid % 20,
-                task_id=task_key,
-            )
+            results, calls = runner.run_task_lifecycle(scenario_id=sid % 20, task_id=task_key)
 
-            all_results[task_key] = [
-                r.to_dict()
-                for r in results
-            ]
-
+            all_results[task_key] = [r.to_dict() for r in results]
             per_task_calls[task_key] = calls
             print(f"  {task_key}: {calls} calls | key status: {rotator.status()}")
             time.sleep(2)  # Groq free tier: 30 RPM -> 2s
@@ -392,46 +307,15 @@ def run_comprehensive_suite(max_calls: int = 200):
         except Exception as e:
             print(f"Skipping scenario {sid}: {e}")
 
-    with open(
-        os.path.join(
-            runner.output_dir,
-            "production_runner_summary.json",
-        ),
-        "w",
-    ) as f:
-        json.dump(
-            all_results,
-            f,
-            indent=2,
-        )
+    with open(os.path.join(runner.output_dir, "production_runner_summary.json"), "w") as f:
+        json.dump(all_results, f, indent=2)
 
-    with open(
-        os.path.join(
-            runner.output_dir,
-            "production_call_counts.json",
-        ),
-        "w",
-    ) as f:
-        json.dump(
-            per_task_calls,
-            f,
-            indent=2,
-        )
+    with open(os.path.join(runner.output_dir, "production_call_counts.json"), "w") as f:
+        json.dump(per_task_calls, f, indent=2)
 
-    print(
-        f"\nEvaluation summary: "
-        f"{runner.output_dir}/production_runner_summary.json"
-    )
-
-    print(
-        f"Per-task call counts: "
-        f"{runner.output_dir}/production_call_counts.json"
-    )
-
-    print(
-        f"Final key status: "
-        f"{rotator.status()}"
-    )
+    print(f"\nEvaluation summary: {runner.output_dir}/production_runner_summary.json")
+    print(f"Per-task call counts: {runner.output_dir}/production_call_counts.json")
+    print(f"Final key status: {rotator.status()}")
 
 
 if __name__ == "__main__":
