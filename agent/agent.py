@@ -61,7 +61,7 @@ class SEALAgent:
         # through a paid-only backend, not genuine per-account depletion.
         # Groq's llama-3.1-8b-instant is smaller/faster and sufficient for planning.
         self.client = Groq(api_key=api_key or os.environ.get("GROQ_API_KEY"))
-        self.model_name = "llama-3.1-8b-instant"
+        self.model_name = "openai/gpt-oss-20b"
         self.steps_history = []
         self.consecutive_failures = 0
 

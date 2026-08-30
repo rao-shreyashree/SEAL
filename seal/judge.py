@@ -139,7 +139,7 @@ def _extract_json(raw: str) -> dict:
 class SEALJudge:
     def __init__(
         self,
-        model_name: str = "llama-3.3-70b-versatile",
+        model_name: str = "openai/gpt-oss-120b",
         api_key: Optional[str] = None,
         max_retries: int = 5,
         backoff_time: float = 2.5,  # Groq free tier: 30 RPM -> 2s+ between calls
