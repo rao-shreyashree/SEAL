@@ -143,3 +143,121 @@ def judge_call_cost_per_task(per_task_calls: dict) -> dict:
         "tasks_at_min": [t for t, c in per_task_calls.items() if c == min(calls)],
         "tasks_at_max": [t for t, c in per_task_calls.items() if c == max(calls)],
     }
+
+
+# E4b: mean +- std across seeded reruns
+#
+# run_baselines.py's --seeds N writes base_seed0.json ... base_seed{N-1}.json (or the unsuffixed base name when N==1 - see run_baselines.py's _seeded_filename)
+# everything below works on top of the metric functions already defined in this file, unmodified - it just runs one of them once per seed and reduces the per-seed values to mean/std
+
+
+def _mean_std(values: List[float]) -> dict:
+    """Pure-python mean/std, no numpy dependency (matches the rest of this
+    file's style). Population std (n, not n-1) - with 5 seeds this is a
+    deliberate choice to report; don't silently switch to sample std
+    without flagging it, the two differ meaningfully at n=5."""
+    n = len(values)
+    if n == 0:
+        return {"mean": None, "std": None, "n": 0, "values": []}
+    mean = sum(values) / n
+    variance = sum((v - mean) ** 2 for v in values) / n if n > 1 else 0.0
+    return {
+        "mean": round(mean, 4),
+        "std": round(variance ** 0.5, 4),
+        "n": n,
+        "values": [round(v, 4) for v in values],
+    }
+
+
+def load_seeded_results(base_filename: str, seeds: List[int], output_dir: str = "./seallogs") -> List[list]:
+    """
+    Loads one condition's seeded output files into List[List[TaskResult]] -
+    one inner list per seed, task iterations flattened (matches the flat
+    list shape every function above expects).
+
+    base_filename: the UNSUFFIXED name, e.g. "reflexion_baseline_summary.json"
+        - this function reconstructs the _seedN suffix itself, matching
+        run_baselines.py's naming exactly. Don't pass an already-suffixed
+        name in.
+    seeds: which seed indices to load, e.g. list(range(5)) for seeds 0-4.
+        A single-element list loads the unsuffixed file directly (same
+        run_baselines.py convention: total_seeds<=1 -> no suffix).
+    """
+    import json
+    import os
+    from seal.task_result import TaskResult
+
+    all_seeds = []
+    missing = []
+    for seed in seeds:
+        if len(seeds) <= 1:
+            fname = base_filename
+        else:
+            name, ext = os.path.splitext(base_filename)
+            fname = f"{name}_seed{seed}{ext}"
+        path = os.path.join(output_dir, fname)
+
+        if not os.path.exists(path):
+            missing.append(path)
+            continue
+
+        with open(path) as f:
+            data = json.load(f)
+
+        flat = [TaskResult.from_dict(d) for iterations in data.values() for d in iterations]
+        all_seeds.append(flat)
+
+    if missing:
+        print(f"[load_seeded_results] {len(missing)}/{len(seeds)} seed file(s) missing, "
+              f"skipped: {missing}")
+    if not all_seeds:
+        raise FileNotFoundError(
+            f"No seed files found for '{base_filename}' in {output_dir}. "
+            f"Run run_baselines.py --seeds {len(seeds)} for this condition first."
+        )
+    return all_seeds
+
+
+def mean_std_across_seeds(metric_fn, seeded_results: List[list]) -> dict:
+    """
+    Runs metric_fn once per seed's results and reduces to mean/std.
+
+    metric_fn: any function above taking (results: List[TaskResult]) and
+        returning either a float (task_success_rate, judge_alignment,
+        recovery_rate_after_first_failure) or a dict of floats
+        (failure_analysis_precision, success_rate_per_failure_type,
+        convergence_speed - note convergence_speed's tasks_never_solved
+        is a count, not a rate, still gets mean/std'd the same way).
+    seeded_results: List[List[TaskResult]] from load_seeded_results().
+
+    Returns:
+      - float-valued metric_fn -> {"mean", "std", "n", "values"}
+      - dict-valued metric_fn  -> {key: {"mean","std","n","values"}, ...}
+        Keys that don't appear in every seed's output (e.g. a failure type
+        that happened to not occur in one seed) get filled with None rather
+        than silently dropped - a key present in 3/5 seeds is itself a
+        finding, not a gap to paper over. Those None entries are excluded
+        from the mean/std calculation for that key but counted in "n".
+    """
+    per_seed_values = [metric_fn(r) for r in seeded_results]
+
+    if not per_seed_values:
+        return {}
+
+    if isinstance(per_seed_values[0], dict):
+        all_keys = set()
+        for v in per_seed_values:
+            all_keys.update(v.keys())
+
+        out = {}
+        for key in sorted(all_keys):
+            present = [v[key] for v in per_seed_values if key in v and isinstance(v[key], (int, float))]
+            missing_count = len(per_seed_values) - len(present)
+            stats = _mean_std(present)
+            stats["n"] = len(per_seed_values)  # report actual seed count, not just present count
+            stats["missing_in_seeds"] = missing_count
+            out[key] = stats
+        return out
+
+    # float-valued metric_fn
+    return _mean_std(per_seed_values)
