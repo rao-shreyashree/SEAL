@@ -113,7 +113,7 @@ def trace_to_str(raw_trace: list[dict]) -> str:
     return "\n".join(lines)
 
 def _extract_json(raw: str) -> dict:
-    """Groq's llama-3.3-70b-versatile often prepends reasoning prose before
+    """Groq's openai/gpt-oss-120b often prepends reasoning prose before
     the JSON block (unlike gemini, which returned near-raw JSON). 
     Pull the JSON object out from wherever it sits in the response instead of
     assuming the whole string is JSON."""

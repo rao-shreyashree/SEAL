@@ -54,19 +54,20 @@ def compute_plan_coherence(plan: str) -> float:
 
 class SEALAgent:
 
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, rotator=None):
         # Migrated off HF Inference Providers (provider="auto" + Qwen2.5-7B)
         # after persistent 402s across accounts, including brand-new tokens
         # with $0 usage - root cause: provider="auto" routing this model
         # through a paid-only backend, not genuine per-account depletion.
-        # Groq's llama-3.1-8b-instant is smaller/faster and sufficient for planning.
+        # Groq's openai/gpt-oss-20b is smaller/faster and sufficient for planning.
         self.client = Groq(api_key=api_key or os.environ.get("GROQ_API_KEY"))
         self.model_name = "openai/gpt-oss-20b"
+        self.rotator = rotator
         self.steps_history = []
         self.consecutive_failures = 0
 
     def plan(self, task: str, rubric: str, max_retries: int = 3, retry_delay: float = 5.0) -> str:
-        """Calls llama-3.1-8b-instant via Groq to generate a structured action plan.
+        """Calls openai/gpt-oss-20b via Groq to generate a structured action plan.
 
         Retries transient failures before falling back - a single flaky call
         used to permanently corrupt strategy_used/plan_coherence for that
@@ -100,6 +101,11 @@ class SEALAgent:
             except Exception as e:
                 last_err = e
                 err_str = str(e).lower()
+                is_quota_error = "429" in err_str or "rate_limit" in err_str
+                if is_quota_error and self.rotator:
+                    self.rotator.force_rotate(reason=f"[agent.plan] {type(e).__name__}: {e}")
+                    self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+                    continue  
                 if "401" in err_str or "429" in err_str or "invalid_api_key" in err_str:
                     self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
                 if attempt < max_retries - 1:

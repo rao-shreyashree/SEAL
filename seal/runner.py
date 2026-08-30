@@ -98,11 +98,11 @@ class KeyRotator:
 class SEALRunner:
     def __init__(self, condition: str = "SEAL_FULL", output_dir: str = "./seallogs",
                  rotator: KeyRotator = None):
-        self.agent = SEALAgent()
+        self.rotator = rotator 
+        self.agent = SEALAgent(rotator=self.rotator)
         self.env = MultiScenarioALFWorldEnv()
         self.condition = condition
         self.output_dir = output_dir
-        self.rotator = rotator  # shared across the full run, not per-task
         os.makedirs(self.output_dir, exist_ok=True)
         
         if condition == "NO_RUBRIC_EVOLUTION":
