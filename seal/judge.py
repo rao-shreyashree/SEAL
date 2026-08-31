@@ -199,6 +199,23 @@ Given an agent execution trace and a scoring rubric, evaluate the agent's perfor
 RUBRIC CRITERIA:
 {json.dumps(rubric, indent=2)}
 
+DISAMBIGUATION RULE — CONTEXT_LOSS vs EXECUTION_ERROR:
+These two failure types are frequently confused. Use this rule strictly:
+- CONTEXT_LOSS: the agent repeats the same or a near-identical action against the same object/location, the observation shows NO new state change, and the observation contains NO blocked/jammed/locked/obstacle keyword. The agent has simply forgotten it already tried this and is looping with no new information.
+- EXECUTION_ERROR: the action fails because of an explicit environment-reported obstruction (e.g. "the drawer is locked", "cannot open, it's stuck", "path blocked").
+If there is no explicit blocked/locked/jammed/stuck keyword in the observation, do NOT classify as EXECUTION_ERROR — classify as CONTEXT_LOSS instead.
+
+Example 1 (CONTEXT_LOSS):
+Step 4: Action -> 'go to countertop 1' | Obs -> On the countertop 1, you see a mug 1.
+Step 5: Action -> 'go to countertop 1' | Obs -> On the countertop 1, you see a mug 1.
+Step 6: Action -> 'go to countertop 1' | Obs -> On the countertop 1, you see a mug 1.
+-> failure_type: "context_loss" (identical action, identical observation, no state change, no blocked keyword)
+
+Example 2 (EXECUTION_ERROR):
+Step 4: Action -> 'open drawer 2' | Obs -> The drawer 2 is locked.
+Step 5: Action -> 'open drawer 2' | Obs -> The drawer 2 is locked.
+-> failure_type: "execution_error" (explicit "locked" keyword — genuine environment obstruction)
+
 AGENT TRACE:
 {trace}
 
