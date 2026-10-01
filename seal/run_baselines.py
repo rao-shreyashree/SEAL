@@ -54,7 +54,7 @@ TOTAL_SCENARIOS = 50
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _seeded_filename(base: str, seed: int, total_seeds: int) -> str:
+def _seeded_filename(base: str, seed: int, total_seeds: int, force_suffix: bool = False) -> str:
     """base.json -> base.json when total_seeds==1 (backward compatible),
     base_seedN.json otherwise."""
     if total_seeds <= 1:
@@ -414,13 +414,22 @@ if __name__ == "__main__":
     parser.add_argument("--start_seed",   type=int, default=0,
                          help="First seed index (for resuming a partial --seeds sweep "
                               "without re-running already-completed seeds).")
+    parser.add_argument("--only_seed",    type=int, default=None,
+                     help="Run exactly ONE seed and write suffixed filenames "
+                          "(e.g. --only_seed 3 -> *_seed3.json). Overrides --seeds and --start_seed."
+                          "Use to fill in a missed seed without re-running earlier ones.")
     args = parser.parse_args()
 
     if not any([args.reflexion, args.zeroshot, args.no_rubric, args.mistral_judge, args.all]):
         parser.print_help()
         sys.exit(0)
 
-    seed_range = range(args.start_seed, args.start_seed + args.seeds)
+    if args.only_seed is not None:
+        seed_range = [args.only_seed]
+        effective_total_seeds = 2
+    else:
+        seed_range = range(args.start_seed, args.start_seed + args.seeds)
+        effective_total_seeds = args.seeds
 
     # One rotator shared across every seed/condition in this invocation -
     # a fresh KeyRotator per call resets .index to 0 and re-uses an
@@ -435,11 +444,11 @@ if __name__ == "__main__":
             print(f"\n{'#' * 60}\n# SEED {seed} ({seed - args.start_seed + 1}/{args.seeds})\n{'#' * 60}")
 
         if args.all or args.reflexion:
-            run_reflexion(total=args.tasks, seed=seed, total_seeds=args.seeds, rotator=shared_rotator)
+            run_reflexion(total=args.tasks, seed=seed, total_seeds=effective_total_seeds, rotator=shared_rotator)
         if args.all or args.zeroshot:
-            run_zeroshot(total=args.tasks, seed=seed, total_seeds=args.seeds, rotator=shared_rotator)
+            run_zeroshot(total=args.tasks, seed=seed, total_seeds=effective_total_seeds, rotator=shared_rotator)
         if args.all or args.no_rubric:
-            run_no_rubric_evolution(total=args.tasks, seed=seed, total_seeds=args.seeds,
+            run_no_rubric_evolution(total=args.tasks, seed=seed, total_seeds=effective_total_seeds,
                                      rotator=shared_rotator)
         if args.all or args.mistral_judge:
-            run_mistral_judge(total=args.tasks, seed=seed, total_seeds=args.seeds, rotator=shared_rotator)
+            run_mistral_judge(total=args.tasks, seed=seed, total_seeds=effective_total_seeds, rotator=shared_rotator)
