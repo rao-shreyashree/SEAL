@@ -179,7 +179,7 @@ class SEALAgent:
         target = target_match.group(1) if target_match else "container"
 
         item_match = re.search(
-            r"Put a (\b\w+\b)|Place a (\b\w+\b)|Examine a (\b\w+\b)", goal
+            r"Put a \w+ (\w+)|Place a \w+ (\w+)|Examine a \w+ (\w+)", goal
         )
         item = "item"
         if item_match:
