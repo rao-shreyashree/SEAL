@@ -68,7 +68,10 @@ DEFAULT_RUBRIC = {
         "description": "Were all actions syntactically valid and applied to correct objects?",
         "weight": 0.25,
         "rules": [
-            "Ensure the agent does not interact with items it hasn't picked up.",
+            # FIX: this env's action space has no separate "pick up" action - "put X in Y" is atomic and implicitly includes acquiring the item. 
+            # Do NOT penalize missing pickup steps; 
+            # only check that the item/container named in the action actually exist in the task and match the goal.
+            "Verify the item and container named in each action are consistent with the task goal - do not require a separate pickup step before a 'put' or 'place' action, as this environment's actions are atomic.",
             "Verify actions use legal ALFWorld environment commands.",
         ],
     },
@@ -76,14 +79,16 @@ DEFAULT_RUBRIC = {
         "description": "Did the agent remember all task constraints across all steps?",
         "weight": 0.20,
         "rules": [
-            "Check that state changes (e.g., heating, cooling) are executed before final placement."
+            "Check that state changes (e.g., heating, cooling) are executed before final placement.",
+            # NEW: explicit context_loss guidance so the judge stops defaulting stagnation traces to execution_error.
+            "If the trace shows a repeated action with a repeated or near-identical observation, classify using this priority order: (1) if the observation contains an explicit blocked/mechanical-failure keyword (e.g. 'jammed', 'mechanical failure', 'cannot open', 'blocked', 'locked'), classify as execution_error - the agent is correctly retrying against a real environment obstacle; (2) else if the observation indicates the agent placed or acted on the wrong object (e.g. 'wrong item', 'task drift detected'), classify as goal_drift - the agent is pursuing the wrong target, not stuck; (3) otherwise (e.g. repeated 'look' or other no-op with a generic unchanged observation, no blocked or drift keyword present), classify as context_loss - the agent has lost track of what to do next with no environment obstacle or wrong-target signal present.",
         ],
     },
     "efficiency": {
         "description": "Did the agent avoid unnecessary steps or backtracking?",
         "weight": 0.20,
         "rules": [
-            "Flag repetitive actions or loops moving between the same locations sequentially."
+            "Flag repetitive actions or loops moving between the same locations sequentially.",
         ],
     },
 }
