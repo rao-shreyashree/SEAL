@@ -1,6 +1,6 @@
 import os
 import re
-from groq import Groq
+from huggingface_hub import InferenceClient
 
 # Valid ALFWorld action verbs for plan coherence scoring
 VALID_ACTION_VERBS = ["go to", "open", "put", "place", "examine", "pick up", "take", "close"]
@@ -15,7 +15,7 @@ def _read_rubric_hints(rubric) -> list:
     Returns a list of hint strings e.g. ["CONTEXT_LOSS_ADDRESSED", "GOAL_DRIFT_ADDRESSED"].
     Returns [] if no hints present (seed rubric, JudgeFixed, or evolution produced no diff).
 
-    This is the ONLY place agent.py reads rubric structure - it never inspects
+    This is the ONLY place agent.py reads rubric structure — it never inspects
     individual criteria keys, so Anagha can rename rubric fields freely without
     breaking agent behavior.
     """
@@ -32,7 +32,7 @@ def _read_rubric_hints(rubric) -> list:
 
 def compute_plan_coherence(plan: str) -> float:
     """
-    Parses the planner's output and returns a 0.0–1.0 coherence score.
+    Parses Mistral's plan output and returns a 0.0–1.0 coherence score.
     Criteria: numbered steps, valid action verbs, no empty lines mid-plan.
     Exported in TaskResult so Shreyashree can use it as a metric directly.
     """
@@ -54,26 +54,27 @@ def compute_plan_coherence(plan: str) -> float:
 
 class SEALAgent:
 
-    def __init__(self, api_key=None, rotator=None):
-        # Migrated off HF Inference Providers (provider="auto" + Qwen2.5-7B)
-        # after persistent 402s across accounts, including brand-new tokens
-        # with $0 usage - root cause: provider="auto" routing this model
-        # through a paid-only backend, not genuine per-account depletion.
-        # Groq's openai/gpt-oss-20b is smaller/faster and sufficient for planning.
-        self.client = Groq(api_key=api_key or os.environ.get("GROQ_API_KEY"))
-        self.model_name = "openai/gpt-oss-20b"
-        self.rotator = rotator
+    def __init__(self, hf_token=None):
+        token = hf_token or os.environ.get("HF_TOKEN")
+        # provider="auto" routes through HF Inference Providers (nebius, sambanova, etc.)
+        # instead of hf-inference, which as of mid-2025 only serves CPU tasks like
+        # embeddings/classification and no longer serves LLMs.
+        # This is what broke Mistral-7B text_generation — it was routing through hf-inference.
+        self.client = InferenceClient(
+            provider="auto",
+            api_key=token,
+        )
         self.steps_history = []
         self.consecutive_failures = 0
 
-    def plan(self, task: str, rubric: str, max_retries: int = 3, retry_delay: float = 5.0) -> str:
-        """Calls openai/gpt-oss-20b via Groq to generate a structured action plan.
+    def plan(self, task: str, rubric: str) -> str:
+        """Calls Qwen2.5-7B-Instruct via HF Inference Providers to generate a structured action plan.
 
-        Retries transient failures before falling back - a single flaky call
-        used to permanently corrupt strategy_used/plan_coherence for that
-        iteration. On 401/429/invalid_api_key, rebuilds self.client from the
-        current GROQ_API_KEY env value, in case KeyRotator rotated keys on
-        the judge side mid-run.
+        Model history (for reference):
+          Mistral-Nemo-Instruct-2407  — chat.completions, "not a chat model" error, FALLBACK every task
+          Mistral-7B-Instruct-v0.3    — text_generation, routed through hf-inference (CPU only), broken
+          HuggingFaceH4/zephyr-7b-beta — chat.completions workaround, unstable
+          Qwen/Qwen2.5-7B-Instruct    — chat.completions + provider=auto, stable on free HF token ✓
         """
         system_prompt = "You are a household task planning agent."
         user_message = (
@@ -84,38 +85,22 @@ class SEALAgent:
             f"'go to <object>', 'open <object>', 'put <item> in <container>', or 'examine <item> using <object>'. "
             f"Output ONLY the numbered plan, no preamble."
         )
-
-        last_err = None
-        for attempt in range(max_retries):
-            try:
-                completion = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message},
-                    ],
-                    temperature=0.3,
-                    max_tokens=256,
-                )
-                return completion.choices[0].message.content.strip()
-            except Exception as e:
-                last_err = e
-                err_str = str(e).lower()
-                is_quota_error = "429" in err_str or "rate_limit" in err_str
-                if is_quota_error and self.rotator:
-                    self.rotator.force_rotate(reason=f"[agent.plan] {type(e).__name__}: {e}")
-                    self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-                    continue  
-                if "401" in err_str or "429" in err_str or "invalid_api_key" in err_str:
-                    self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-                if attempt < max_retries - 1:
-                    import time
-                    time.sleep(retry_delay)
-
-        return (
-            f"1. Go to container\n2. Open container\n3. Place item\n"
-            f"[FALLBACK - Groq planner unavailable: {last_err}]"
-        )
+        try:
+            completion = self.client.chat.completions.create(
+                model="Qwen/Qwen2.5-7B-Instruct",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=0.3,
+                max_tokens=256,
+            )
+            return completion.choices[0].message.content.strip()
+        except Exception as e:
+            return (
+                f"1. Go to container\n2. Open container\n3. Place item\n"
+                f"[FALLBACK - Qwen unavailable: {e}]"
+            )
 
     def _detect_failure_type(self, success: bool, trajectory: list) -> str:
         """Intrinsic failure diagnostic engine (independent from environmental oracle).
@@ -165,77 +150,108 @@ class SEALAgent:
 
         return "UNKNOWN"
 
-    def execute(self, plan: str, env, rubric: str) -> dict:
-        """Executes the step trajectory while monitoring for loop anomalies."""
+    def _parse_plan_steps(self, plan: str) -> list:
+        """Parse LLM plan output into a list of action strings.
+
+        Handles both numbered formats:
+          "1. go to fridge 1"
+          "1) go to fridge 1"
+        Strips the number prefix and returns clean action strings.
+        Empty or FALLBACK plans return an empty list.
+        """
+        if not plan or "[FALLBACK" in plan:
+            return []
+
+        steps = []
+        for line in plan.strip().split("\n"):
+            line = line.strip()
+            m = re.match(r"^\d+[\.\)\s]\s*(.*)", line)
+            if m:
+                action = m.group(1).strip()
+                if action:
+                    steps.append(action)
+        return steps
+
+    def execute(self, plan: str, env, rubric) -> dict:
+        """Execute the LLM plan against the environment step by step.
+
+        E5 change: execute() now CONSUMES the plan produced by plan().
+        It parses the numbered steps and dispatches them in order.
+        The forced_outcome branch ladder is gone — success comes from
+        env.step() returning True, not from reading env.data["forced_outcome"].
+
+        For real ALFWorldEnv (E5): env._match_admissible() normalizes each
+        plan step to the closest admissible command before dispatch, so
+        ALFWorld does not silently reject unrecognized action strings.
+
+        For MultiScenarioALFWorldEnv (E1-E4): plan steps are dispatched
+        directly. The scripted env handles forced_outcome internally in
+        env.step() — agent.execute() no longer reads that flag at all.
+        This is the paper's main claim: agent reacts to the plan and rubric
+        hints, not to an oracle.
+
+        Rubric hints (from judge.evolve_rubric()) now condition the PLANNER
+        PROMPT in runner.py rather than flipping a branch in execute().
+        The causal chain becomes: rubric evolution → richer prompt → better
+        plan → better execution, which is what the paper actually measures.
+
+        Fallback: if the plan is empty or unparseable, a minimal hardcoded
+        sequence is used so the run does not crash. Logged via loop alert.
+        """
         self.steps_history = []
         self.consecutive_failures = 0
         goal, current_obs = env.reset()
         done = False
         step_count = 0
         max_steps = 10
-        sequence_state = 0
 
-        target_match = re.search(r"see a (\b\w+\b) 1", current_obs)
-        target = target_match.group(1) if target_match else "container"
+        # Parse LLM plan into ordered action list
+        plan_steps = self._parse_plan_steps(plan)
 
-        item_match = re.search(
-            r"Put a \w+ (\w+)|Place a \w+ (\w+)|Examine a \w+ (\w+)", goal
-        )
-        item = "item"
-        if item_match:
-            item = [g for g in item_match.groups() if g is not None][0]
+        # Fallback if plan is empty or unparseable
+        if not plan_steps:
+            target_match = re.search(r"see a (\b\w+\b) 1", current_obs)
+            target = target_match.group(1) if target_match else "container"
+            item_match = re.search(
+                r"Put a (\b\w+\b)|Place a (\b\w+\b)|Examine a (\b\w+\b)", goal
+            )
+            item = "item"
+            if item_match:
+                item = [g for g in item_match.groups() if g is not None][0]
+            plan_steps = [
+                f"go to {target} 1",
+                f"open {target} 1",
+                f"put {item} in {target} 1",
+            ]
 
-        # Resolve GOAL_DRIFT wrong-item token from scenario config if available
-        # Falls back to hardcoded "key ring" only as last resort
-        drift_item = getattr(env, "drift_item", None) or env.data.get("drift_item", "key ring")
+        # Rubric hints read once for confidence scoring only.
+        # execute() no longer branches on hints — that job moved to the
+        # planner prompt in runner.py (E5 step 4 architectural change).
+        hints = _read_rubric_hints(rubric)
+
+        plan_idx = 0
 
         while not done and step_count < max_steps:
             step_count += 1
 
-            forced_outcome = env.data["forced_outcome"]
-
-            # Strategy selection - ordered by priority.
-            # Rubric hints from judge.evolve_rubric() tell us which failure type
-            # the judge addressed in its latest rewrite. We check hints (substance)
-            # not literal marker strings (option-a from design discussion).
-            # "CONTEXT_LOSS_ADDRESSED" in hints means the judge added rules targeting
-            # loop/stagnation - agent should attempt escape actions, not just "look".
-            # "GOAL_DRIFT_ADDRESSED" means the judge flagged wrong-item substitution -
-            # agent should stay on the correct item instead of drifting.
-            hints = _read_rubric_hints(rubric)
-            context_loss_rubric_updated = "CONTEXT_LOSS_ADDRESSED" in hints
-            goal_drift_rubric_updated   = "GOAL_DRIFT_ADDRESSED" in hints
-
-            if forced_outcome == "CONTEXT_LOSS" and not context_loss_rubric_updated:
-                # Judge hasn't addressed context loss yet - agent stays stuck (stagnates)
-                action = "look"
-            elif self.consecutive_failures >= 2:
-                # Recovery: skip ahead to placement attempt
-                action = f"put {item} in {target} 1"
-            elif forced_outcome == "GOAL_DRIFT" and step_count >= 3 and not goal_drift_rubric_updated:
-                # Judge hasn't addressed goal drift yet - agent drifts to wrong item
-                action = f"put {drift_item} in {target} 1"
-            elif sequence_state == 0:
-                action = f"go to {target} 1"
-                sequence_state = 1
-            elif sequence_state == 1:
-                action = f"open {target} 1"
-                if forced_outcome != "EXECUTION_ERROR":
-                    sequence_state = 2
+            # Dispatch next plan step; cycle last step if plan exhausted
+            if plan_idx < len(plan_steps):
+                action = plan_steps[plan_idx]
+                plan_idx += 1
             else:
-                if "examine" in goal.lower():
-                    action = f"examine {item} using {target} 1"
-                else:
-                    action = f"put {item} in {target} 1"
+                action = plan_steps[-1] if plan_steps else "look"
 
-            next_obs, success = env.step(action, rubric)
+            # Pass rubric as string for scripted env compatibility;
+            # ALFWorldEnv.step() ignores it
+            rubric_str = rubric if isinstance(rubric, str) else ""
+            next_obs, success = env.step(action, rubric_str)
 
-            # internal_loop_alert is None (Python None) or a warning string
-            # IMPORTANT: use None not the string "None"
             internal_warning = None
             if next_obs == current_obs:
                 self.consecutive_failures += 1
-                internal_warning = f"WARNING: Loop detected. Stagnation count: {self.consecutive_failures}."
+                internal_warning = (
+                    f"WARNING: Loop detected. Stagnation count: {self.consecutive_failures}."
+                )
             else:
                 self.consecutive_failures = 0
 
@@ -264,8 +280,6 @@ class SEALAgent:
         confidence_score = confidence_map.get(detected_failure_type, 0.50)
         plan_coherence = compute_plan_coherence(plan)
 
-        # Behavioral drift recovery:
-        # did the agent initially drift to the wrong item, then later place the correct item in the same trajectory?
         drifted_at_some_step = any(
             "wrong item" in s["observation_received"].lower()
             or "task drift" in s["observation_received"].lower()
@@ -276,7 +290,7 @@ class SEALAgent:
         return {
             "task_goal": goal,
             "macro_plan": plan,
-            "plan_coherence": plan_coherence,       # NEW: metric per architecture diagram
+            "plan_coherence": plan_coherence,
             "total_steps": step_count,
             "final_outcome": final_outcome,
             "detected_failure_type": detected_failure_type,
